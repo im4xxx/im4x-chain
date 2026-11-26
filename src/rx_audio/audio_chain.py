@@ -38,11 +38,11 @@ AUDIO_EXT = {".wav", ".flac"}
 FLAC_LEVEL = 5 / 8                                # libsndfile 0..1 maps to flac -0..-8
 
 # defaults: the user's RX Module Chain (Leveler, Loudness Control items), with denser dynamics:
-# Leveler keeps 45 % of phrase differences (chain: 65 %) and the compressor works on loud
+# Leveler keeps 60 % of phrase differences (chain: 65 %) and the compressor works on loud
 # syllables (-20 dBFS, 3:1; the chain's X-Comp at -10.7 dBFS, 4:1 only touched 3-7 % of peaks).
 # Together the loudness range drops by 3-4 LU. Attack 0.1 ms (the X-Comp minimum): a slower
 # attack lets word onsets through while the rest of the word is compressed, so they stick out.
-LEVELER_DEFAULTS = {"target": -24.0, "responsiveness": 3.3, "preserve": 45.0, "ess_db": 4.0}
+LEVELER_DEFAULTS = {"target": -24.0, "responsiveness": 3.3, "preserve": 60.0, "ess_db": 4.0}
 COMP_DEFAULTS = {**XCOMP_DEFAULTS, "threshold": -20.0, "ratio": 3.0, "attack": 0.1, "release": 120.0,
                  "knee": 8.0}
 LOUDNESS_DEFAULTS = {"target": -24.0, "ceiling": -3.0}

@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--no-loudness", action="store_true")
     pr.add_argument("--leveler-target", type=float, default=-24.0, help="LUFS (default -24)")
     pr.add_argument("--responsiveness", type=float, default=3.3)
-    pr.add_argument("--preserve", type=float, default=45.0, help="%% of phrase dynamics kept (default 45)")
+    pr.add_argument("--preserve", type=float, default=60.0, help="%% of phrase dynamics kept (default 60)")
     pr.add_argument("--ess", type=float, default=4.0, help="max de-ess reduction, dB (default 4)")
     pr.add_argument("--target", type=float, default=-24.0, help="loudness target, LUFS (default -24)")
     pr.add_argument("--ceiling", type=float, default=-3.0, help="true-peak ceiling, dBTP (default -3)")
