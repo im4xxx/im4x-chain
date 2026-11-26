@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rx-audio"
+version = "0.1.0"
+description = "Voice chain for voice-over recordings without the iZotope RX app: EQ, RX 12 plugins (De-plosive, Mouth De-click, Spectral De-noise), Leveler, compressor, Loudness Control"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numba>=0.68.1",
+  "numpy>=2.0",
+  "pedalboard>=0.9.26",
+  "scipy>=1.11",
+  "soundfile>=0.12",
+]
+
+[project.scripts]
+rx-audio = "rx_audio.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rx_audio"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
