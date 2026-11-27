@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -71,39 +72,83 @@ def _to_pcm(y: np.ndarray, subtype: str, rng: np.random.Generator) -> np.ndarray
     return np.clip(y, -1.0, 1.0) if subtype.startswith("PCM") else y
 
 
+Progress = Callable[[dict[str, Any]], None]
+
+
 def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True,
                  leveler_opts: dict[str, float] | None = None, loudness_opts: dict[str, float] | None = None,
                  output_dir: Path | None = None, eq_bands: list[str] | None = None,
                  use_comp: bool = True, comp_opts: dict[str, float] | None = None,
                  use_denoise: bool = True, denoise_reduction_db: float | None = None,
-                 use_declick: bool = True, use_deplosive: bool = True) -> dict[str, Any]:
+                 use_declick: bool = True, use_deplosive: bool = True,
+                 progress: Progress | None = None) -> dict[str, Any]:
     """``eq_bands``: None = default EQ (low cut matched to the voice, 70-120 Hz, and an
     18 kHz low-pass), [] = no EQ. ``use_deplosive``: run De-plosive and keep it where needed.
-    ``denoise_reduction_db``: None = the chain's Reduction (16 dB)."""
+    ``denoise_reduction_db``: None = the chain's Reduction (16 dB).
+
+    ``progress``: optional callback for a UI (the CLI's ``--progress-file``). It receives
+    ``begin`` (stage list), ``stage`` start/done events, ``done`` (loudness before/after) and
+    ``error`` events. A failing callback never interrupts the audio processing."""
+    emit = progress or (lambda _event: None)
+
+    def notify(event: dict[str, Any]) -> None:
+        try:
+            emit(event)
+        except Exception:                          # noqa: BLE001 - a UI must not break a render
+            pass
+
     t0 = time.time()
     path = Path(path)
     if path.suffix.lower() not in AUDIO_EXT:
         raise ValueError(f"unsupported file type: {path.name} (WAV or FLAC)")
+
+    stages = ["read"]
+    if eq_bands is None:
+        stages.append("voice")
+    if eq_bands is None or eq_bands:
+        stages.append("eq")
+    for name, enabled in (("deplosive", use_deplosive), ("declick", use_declick),
+                          ("denoise", use_denoise), ("leveler", use_leveler),
+                          ("compressor", use_comp), ("loudness", use_loudness)):
+        if enabled:
+            stages.append(name)
+    stages += ["write", "measure"]
+    stage_no = {name: i + 1 for i, name in enumerate(stages)}
+    notify({"event": "begin", "file": str(path), "stages": ",".join(stages), "total": len(stages),
+            "pid": os.getpid()})
+
+    def begin_stage(name: str) -> float:
+        notify({"event": "stage", "stage": name, "status": "start",
+                "index": stage_no[name], "total": len(stages)})
+        return time.time()
+
+    def end_stage(name: str, t: float) -> None:
+        notify({"event": "stage", "stage": name, "status": "done", "seconds": round(time.time() - t, 2)})
+
+    t = begin_stage("read")
     info = sf.info(str(path))
     x, sr = sf.read(str(path), dtype="float64", always_2d=False)
     entry: dict[str, Any] = {"file": str(path), "format": info.format, "subtype": info.subtype,
                              "sample_rate": sr, "channels": info.channels, "before": measure(x, sr)}
     y = x
+    end_stage("read", t)
     timings: dict[str, float] = {"read_and_measure": round(time.time() - t0, 2)}
 
     def stage(name: str, fn, *a, **kw) -> None:
         nonlocal y
-        t = time.time()
+        t = begin_stage(name)
         y, entry[name] = fn(y, sr, *a, **kw)
         timings[name] = round(time.time() - t, 2)
+        end_stage(name, t)
 
     applied_eq: list[str] = []
     if eq_bands is None or eq_bands:
         voice = None
         if eq_bands is None:                       # default: low cut matched to the voice
-            t = time.time()
+            t = begin_stage("voice")
             applied_eq, voice = voice_bands(x, sr)
             timings["voice_pitch"] = round(time.time() - t, 2)
+            end_stage("voice", t)
         else:
             applied_eq = eq_bands
         stage("eq", equalize, applied_eq)
@@ -127,6 +172,7 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         entry["warning"] = f"{clipped} samples above 0 dBFS were clipped; enable loudness control or lower the target"
     dest = (Path(output_dir).expanduser() / path.name) if output_dir else path
     dest.parent.mkdir(parents=True, exist_ok=True)
+    t = begin_stage("write")
     pcm = _to_pcm(y, info.subtype, np.random.default_rng(0))
     tmp = dest.with_name(f".{dest.stem}.im4xchain.tmp{dest.suffix}")
     try:
@@ -142,9 +188,16 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
+    end_stage("write", t)
     entry["output"] = str(dest)
+    t = begin_stage("measure")
     entry["after"] = measure(sf.read(str(dest), dtype="float64", always_2d=False)[0], sr)
+    end_stage("measure", t)
     entry["seconds"] = round(time.time() - t0, 2)
+    notify({"event": "done", "ok": True, "output": str(dest),
+            "before_lufs": entry["before"]["lufs"], "before_tp": entry["before"]["true_peak_db"],
+            "after_lufs": entry["after"]["lufs"], "after_tp": entry["after"]["true_peak_db"],
+            "seconds": entry["seconds"], "warning": entry.get("warning", "")})
     return entry
 
 
@@ -153,7 +206,8 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
                   output_dir: str | None = None, eq_bands: list[str] | None = None,
                   use_comp: bool = True, comp_opts: dict[str, float] | None = None,
                   use_denoise: bool = True, denoise_reduction_db: float | None = None,
-                  use_declick: bool = True, use_deplosive: bool = True) -> dict[str, Any]:
+                  use_declick: bool = True, use_deplosive: bool = True,
+                  progress: Progress | None = None) -> dict[str, Any]:
     if eq_bands:                                   # fail fast on a typo, before touching files
         from im4x_chain.eq import parse_band
         for b in eq_bands:
@@ -165,7 +219,14 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
             results.append({"ok": True, **process_file(f, use_leveler, use_loudness, leveler_opts,
                                                        loudness_opts, Path(output_dir) if output_dir else None,
                                                        eq_bands, use_comp, comp_opts, use_denoise,
-                                                       denoise_reduction_db, use_declick, use_deplosive)})
+                                                       denoise_reduction_db, use_declick, use_deplosive,
+                                                       progress=progress)})
         except Exception as e:  # noqa: BLE001 - report per file, keep going
-            results.append({"ok": False, "file": str(f), "error": f"{type(e).__name__}: {e}"})
+            msg = f"{type(e).__name__}: {e}"
+            if progress is not None:
+                try:
+                    progress({"event": "error", "file": str(f), "message": msg})
+                except Exception:              # noqa: BLE001
+                    pass
+            results.append({"ok": False, "file": str(f), "error": msg})
     return {"ok": all(r["ok"] for r in results) and bool(results), "count": len(results), "results": results}

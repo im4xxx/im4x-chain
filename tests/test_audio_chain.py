@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -155,6 +157,27 @@ def test_cli_processes_and_measures(tmp_path, capsys) -> None:
     assert "LUFS" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main(["process", str(src), "--eq", "bogus:1"])
+
+
+def test_progress_file_reports_stages_and_result(tmp_path) -> None:
+    from im4x_chain.cli import main
+    x, _ = speechlike([-30, -28])
+    src = tmp_path / "p.wav"
+    sf.write(str(src), x, SR, subtype="PCM_24")
+    out, prog = tmp_path / "o", tmp_path / "progress.jsonl"
+    args = ["process", str(src), "-o", str(out), "--no-eq", "--no-deplosive", "--no-declick",
+            "--no-denoise", "--no-leveler", "--no-comp", "--no-loudness",
+            "--progress-file", str(prog)]
+    assert main(args) == 0
+    events = [json.loads(line) for line in prog.read_text().splitlines() if line.strip()]
+    assert events[0]["event"] == "begin"
+    assert events[0]["stages"] == "read,write,measure"
+    starts = [e["stage"] for e in events if e.get("status") == "start"]
+    assert starts == ["read", "write", "measure"]
+    assert [e["event"] for e in events[-2:]] == ["stage", "done"]
+    assert events[-1]["ok"] is True
+    assert events[-1]["after_lufs"] == pytest.approx(events[-1]["before_lufs"], abs=0.1)
+    assert (out / "p.wav").exists()
 
 
 # Values measured on the real SSL Native X-Comp v6 (AU) with the chain's settings.

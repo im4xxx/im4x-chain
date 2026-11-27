@@ -4,7 +4,8 @@ EQ -> De-plosive (where needed) -> Mouth De-click -> Spectral De-noise -> Levele
 
     im4x-chain process FILES_OR_DIRS... [-o OUT_DIR] [--eq hp:60 --eq peak:3000:+2:1] [--no-eq]
                      [--no-deplosive] [--no-declick] [--no-denoise]
-                     [--no-leveler] [--no-comp] [--no-loudness] [--target -24] [--ceiling -3] ...
+                     [--no-leveler] [--no-comp] [--no-loudness] [--target -24] [--ceiling -3]
+                     [--progress-file PATH] ...
     im4x-chain measure FILES_OR_DIRS...
 
 Files are changed in place unless ``-o`` is given. Exit code 1 if any file failed.
@@ -26,16 +27,31 @@ def _fmt(m: dict) -> str:
 
 def _process(a: argparse.Namespace) -> int:
     bands = [] if a.no_eq else (a.eq or None)
-    res = audio_chain.process_files(
-        a.paths, eq_bands=bands, use_leveler=not a.no_leveler, use_loudness=not a.no_loudness,
-        leveler_opts={"target": a.leveler_target, "responsiveness": a.responsiveness,
-                      "preserve": a.preserve, "ess_db": a.ess},
-        loudness_opts={"target": a.target, "ceiling": a.ceiling},
-        use_comp=not a.no_comp, use_denoise=not a.no_denoise, denoise_reduction_db=a.reduction,
-        use_declick=not a.no_declick, use_deplosive=not a.no_deplosive,
-        comp_opts={"threshold": a.comp_threshold, "ratio": a.comp_ratio, "attack": a.comp_attack,
-                   "release": a.comp_release, "knee": a.comp_knee, "makeup": a.comp_makeup},
-        output_dir=a.output_dir)
+    try:
+        pf = open(a.progress_file, "w", encoding="utf-8", buffering=1) if a.progress_file else None
+    except OSError as e:
+        print(f"cannot write progress file {a.progress_file}: {e}", file=sys.stderr)
+        return 1
+
+    def progress(event: dict) -> None:
+        if pf is not None:
+            pf.write(json.dumps(event, ensure_ascii=False) + "\n")
+            pf.flush()
+
+    try:
+        res = audio_chain.process_files(
+            a.paths, eq_bands=bands, use_leveler=not a.no_leveler, use_loudness=not a.no_loudness,
+            leveler_opts={"target": a.leveler_target, "responsiveness": a.responsiveness,
+                          "preserve": a.preserve, "ess_db": a.ess},
+            loudness_opts={"target": a.target, "ceiling": a.ceiling},
+            use_comp=not a.no_comp, use_denoise=not a.no_denoise, denoise_reduction_db=a.reduction,
+            use_declick=not a.no_declick, use_deplosive=not a.no_deplosive,
+            comp_opts={"threshold": a.comp_threshold, "ratio": a.comp_ratio, "attack": a.comp_attack,
+                       "release": a.comp_release, "knee": a.comp_knee, "makeup": a.comp_makeup},
+            output_dir=a.output_dir, progress=progress if pf is not None else None)
+    finally:
+        if pf is not None:
+            pf.close()
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1, default=float))
     else:
@@ -114,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--comp-knee", type=float, default=8.0, help="dB (default 8)")
     pr.add_argument("--comp-makeup", type=float, default=0.0, help="dB (default 0)")
     pr.add_argument("--json", action="store_true", help="print the full report as JSON")
+    pr.add_argument("--progress-file", metavar="PATH",
+                    help="write machine-readable progress (JSON lines: begin/stage/done/error) here")
     pr.set_defaults(func=_process)
 
     me = sub.add_parser("measure", help="integrated loudness and true peak")
