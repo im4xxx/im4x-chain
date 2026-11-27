@@ -16,8 +16,8 @@ with ``pedalboard``. Settings come from the user's Module Chain (``data/rx_chain
   The plugin's default blob with the profile, the tuned table and 21 other words copied
   from the chain renders bit-identically to the chain's own blob.
 * **Mouth De-click** — Sensitivity, Frequency skew, Click widening from the chain.
-* **De-plosive** — not in the chain; plugin defaults (Sensitivity 5, Strength 5, Frequency
-  limit 200 Hz). It is rendered on every file, and the result is kept only where it actually
+* **De-plosive** — not in the chain; Sensitivity 5, Strength 5, frequency limit below the
+  voice (0.8 x its low pitch, 60-200 Hz). It is rendered on every file, and the result is kept only where it actually
   removed plosives: places where the lows drop by more than 10 dB, at least 20 per hour.
 
 Rendering skips digital silence (exact zeros) and splits audio into chunks of up to 60 s
@@ -438,18 +438,34 @@ def mouth_declick(x: np.ndarray, sr: int, sensitivity: float | None = None,
 
 
 def deplosive(x: np.ndarray, sr: int, sensitivity: float = 5.0, strength: float = 5.0,
-              frequency_limit_hz: float = 200.0, force: bool = False) -> tuple[np.ndarray, dict[str, Any]]:
+              frequency_limit_hz: float | None = None, force: bool = False) -> tuple[np.ndarray, dict[str, Any]]:
     """De-plosive where the recording has plosives. Returns (audio, info); ``info["applied"]``
-    says whether the plugin's output was kept (``force`` keeps it always)."""
-    p = _load(DEPLOSIVE_PLUGIN)
-    p.sensitivity, p.strength, p.frequency_limit_hz = float(sensitivity), float(strength), float(frequency_limit_hz)
-    y = _render(DEPLOSIVE_PLUGIN, bytes(p.raw_state), x, sr)
+    says whether the plugin's output was kept (``force`` keeps it always).
+
+    ``frequency_limit_hz`` (the plugin's upper repair frequency): None = below the voice,
+    0.8 x its low pitch (5th percentile of F0), 60-200 Hz in 5 Hz steps. With the plugin's
+    200 Hz a male voice (F0 100-140 Hz) loses its fundamental: the plugin takes voiced
+    low end for plosives (-2 dB on 90-200 Hz on average, much more on single words)."""
+    pitch = None
+    if frequency_limit_hz is None:
+        from im4x_chain.eq import voice_pitch
+        pitch = voice_pitch(x, sr)
+        frequency_limit_hz = (200.0 if pitch is None else
+                              float(np.clip(round(0.8 * pitch["f0_p5_hz"] / 5) * 5, 60.0, 200.0)))
+    # the settings go into the state blob itself: parameters set through pedalboard do not
+    # reach ``raw_state``, which is what the render workers load
+    ctx, j = _unpack(_default_state(DEPLOSIVE_PLUGIN))
+    el = _elements(j)["DePlosive"]["Value"]
+    for k, v in (("Sensitivity", sensitivity), ("Strength", strength), ("Upper Repair Frequency", frequency_limit_hz)):
+        el[k]["Value"] = float(v)
+    y = _render(DEPLOSIVE_PLUGIN, _pack(ctx, j), x, sr)
     events = _plosive_events(x, y, sr)
     hours = len(x) / sr / 3600
     need = max(3, int(np.ceil(PLOSIVES_PER_HOUR * hours)))
     applied = force or len(events) >= need
     info = {"applied": applied, "plosives": len(events), "needed": need,
             "settings": {"Sensitivity": sensitivity, "Strength": strength, "Frequency limit": frequency_limit_hz},
+            "voice_f0_p5_hz": None if pitch is None else pitch["f0_p5_hz"],
             "examples_s": [round(t, 2) for t, _ in sorted(events, key=lambda e: -e[1])[:5]]}
     return (y if applied else x.copy()), info
 
