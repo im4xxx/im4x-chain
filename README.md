@@ -156,6 +156,38 @@ tail_max_ms = 600.0
 target = -23.0
 ```
 
+### Свои значения из Module Chain RX
+
+Если в RX у вас своя цепочка, её значения можно перенести в `config.toml` одной командой.
+Цепочку нужно сохранить в RX как пресет (Module Chain → Save preset); RX кладёт пресеты в
+`Documents/iZotope/RX Audio Editor/User Presets/Module Chain/`.
+
+```sh
+im4x-chain import-rx                      # список пресетов
+im4x-chain import-rx "Мой пресет"         # перенести значения в config.toml
+im4x-chain import-rx "Мой пресет" --dry-run   # только показать, что будет записано
+im4x-chain import-rx путь/к/пресету.xml   # пресет из другого места
+```
+
+Переносится:
+
+| Модуль RX | Раздел | Что |
+|---|---|---|
+| Spectral De-noise | `[denoise]` | Reduction (профиль шума всё равно снимается с каждого файла) |
+| Mouth De-click | `[declick]` | Sensitivity, Frequency skew, Click widening |
+| Leveler | `[leveler]` | Target, Responsiveness, Preserve, Ess (0, если выключен) |
+| Loudness Control | `[loudness]` | Loudness, Margin (потолок true peak) |
+| EQ | `[eq]` | включённые полосы; записываются закомментированными, `--eq` — включить |
+
+Модуль, выключенный в цепочке или отсутствующий в ней, выключается и здесь
+(`[stages] … = false`). EQ по умолчанию не включается, потому что фиксированные полосы
+заменяют срез низа, подобранный под голос. Не переносятся плагины в Plugin Host (например,
+компрессор: их настройки — внутренние данные самого плагина), Breath Level у Leveler и
+short-term ограничение у Loudness — команда об этом пишет.
+
+Остальное в файле (комментарии, свои значения гейта и т. п.) не меняется; у перенесённых
+строк пометка `# из RX: <пресет>`. Повторный импорт заменяет значения, а не дублирует их.
+
 Разделы: `stages` (какие этапы работают), `eq` (`bands` — свои полосы вместо подбора по
 голосу), `deplosive`, `declick`, `denoise` (`reduction_db`), `gate`, `leveler`,
 `compressor`, `loudness`. Порядок важности: значения по умолчанию < файл < ключи командной

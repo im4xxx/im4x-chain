@@ -162,3 +162,30 @@ def dump(settings: dict[str, dict[str, Any]]) -> str:
             lines.append(f"{k} = {_toml(v)}" if v is not None else f"# {k}: {AUTO[(section, k)][0]}")
         lines.append("")
     return "\n".join(lines)
+
+
+def set_values(text: str, values: dict[str, dict[str, Any]], note: str = "",
+               commented: set[tuple[str, str]] = frozenset()) -> str:
+    """Sets keys in TOML text, keeping its comments and other keys: a line ``key = ...`` or
+    ``# key = ...`` in the section is replaced, otherwise the key goes right after the section
+    header; a missing section is appended. Keys in ``commented`` are written commented out."""
+    import re
+    lines = text.splitlines()
+    for section, keys in values.items():
+        for key, value in keys.items():
+            _check(section, key, value)
+            line = f"{key} = {_toml(value)}" + (f"   # {note}" if note else "")
+            if (section, key) in commented:
+                line = "# " + line
+            head = next((i for i, s in enumerate(lines) if s.strip() == f"[{section}]"), None)
+            if head is None:
+                lines += ["", f"[{section}]"]
+                head = len(lines) - 1
+            end = next((i for i in range(head + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+            pat = re.compile(rf"^\s*#?\s*{re.escape(key)}\s*=")
+            hit = next((i for i in range(head + 1, end) if pat.match(lines[i])), None)
+            if hit is None:
+                lines.insert(head + 1, line)
+            else:
+                lines[hit] = line
+    return "\n".join(lines) + "\n"

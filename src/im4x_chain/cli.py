@@ -8,6 +8,7 @@ EQ -> De-plosive (where needed) -> Mouth De-click -> Spectral De-noise -> Gate -
                      [--progress-file PATH] ...
     im4x-chain measure FILES_OR_DIRS...
     im4x-chain config [--init [--force]] [--path] [--config PATH]
+    im4x-chain import-rx [PRESET] [--eq] [--dry-run] [--config PATH]
 
 Files are changed in place unless ``-o`` is given. Exit code 1 if any file failed.
 Settings: built-in defaults < the config file (``im4x-chain config --path``) < flags.
@@ -136,6 +137,38 @@ def _config(a: argparse.Namespace) -> int:
     return 0
 
 
+def _import_rx(a: argparse.Namespace) -> int:
+    from im4x_chain import rx_preset
+    if not a.preset:
+        found = rx_preset.list_presets()
+        print(f"RX Module Chain presets in {rx_preset.presets_dir()}:")
+        for q in found:
+            print(f"  {q.stem}")
+        if not found:
+            print("  (none)")
+        print('\nimport one: im4x-chain import-rx "NAME"')
+        return 0
+    src = rx_preset.find(a.preset)
+    values, notes = rx_preset.to_settings(rx_preset.read_modules(src))
+    path = config.config_path(a.config)
+    text = path.read_text(encoding="utf-8") if path.is_file() else config.template()
+    commented = set() if a.eq else {("eq", "bands")}
+    new = config.set_values(text, values, note=f"из RX: {src.stem}", commented=commented)
+    print(f"{'would write' if a.dry_run else 'written'} {path} from {src.name}:")
+    for section, keys in values.items():
+        for k, v in keys.items():
+            off = " (закомментировано: EQ остаётся по голосу; --eq, чтобы включить)" \
+                if (section, k) in commented else ""
+            print(f"  [{section}] {k} = {config._toml(v)}{off}")
+    for n in notes:
+        print(f"  - {n}")
+    if not a.dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new, encoding="utf-8")
+        config.load(path)                                   # the result must read back
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="im4x-chain",
                                 description="Voice chain without the RX app: EQ, De-plosive, Mouth De-click, De-noise, Gate, Leveler, compressor, Loudness.")
@@ -183,6 +216,13 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--path", action="store_true", help="print the config file location")
     co.add_argument("--config", metavar="PATH", help="another settings file")
     co.set_defaults(func=_config)
+
+    ir = sub.add_parser("import-rx", help="take settings from an RX Module Chain preset into the config")
+    ir.add_argument("preset", nargs="?", help="preset name from the RX folder or a path to .xml; none = list presets")
+    ir.add_argument("--eq", action="store_true", help="also use the preset's EQ instead of the low cut matched to the voice")
+    ir.add_argument("--dry-run", action="store_true", help="show what would be written, change nothing")
+    ir.add_argument("--config", metavar="PATH", help="another settings file")
+    ir.set_defaults(func=_import_rx)
 
     me = sub.add_parser("measure", help="integrated loudness and true peak")
     me.add_argument("paths", nargs="+")

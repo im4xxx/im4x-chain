@@ -373,3 +373,63 @@ def test_config_file_applies_and_flags_win(tmp_path):
         assert abs(integrated_lufs(y, SR) - want) < 0.05
     with pytest.raises(SystemExit):                                       # a named file must exist
         main(base + ["-o", str(tmp_path / "o9"), "--config", str(tmp_path / "missing.toml")])
+
+
+def _rx_preset(tmp_path, modules):
+    """A Module Chain preset as RX writes it: base64 items with the module state as JSON text."""
+    import base64
+    import json
+
+    def item(mid, enabled, params):
+        state = {k: {"Type": "Float", "Value": v} for k, v in params.items()}
+        d = {"ElementID": {"Type": "String", "Value": mid}, "ENABLED": {"Type": "Bool", "Value": enabled},
+             "ElementState": {"Type": "String", "Value": json.dumps(state)}}
+        return {"Type": "Base64", "Value": base64.b64encode(json.dumps(d).encode()).decode()}
+    p = tmp_path / "My chain.xml"
+    p.write_text(json.dumps({"actions": {"Type": "Array", "Value": [item(*m) for m in modules]},
+                             "version": {"Type": "UInt", "Value": 1}}), encoding="utf-8")
+    return p
+
+
+def test_import_rx_preset_into_config(tmp_path):
+    from im4x_chain import config
+    from im4x_chain.cli import main
+    eq = {"Band 1 Enable": True, "Band 1 Frequency": 80, "Band 1 Gain": 0, "Band 1 Q": 1, "Band 1 Shape": 4,
+          "Band 2 Enable": True, "Band 2 Frequency": 3000, "Band 2 Gain": 2, "Band 2 Q": 1, "Band 2 Shape": 0,
+          "Band 3 Enable": False, "Band 3 Frequency": 200, "Band 3 Gain": 0, "Band 3 Q": 1, "Band 3 Shape": 0,
+          "Band 4 Enable": True, "Band 4 Frequency": 18000, "Band 4 Gain": 0, "Band 4 Q": 2, "Band 4 Shape": 3}
+    preset = _rx_preset(tmp_path, [
+        ("DenoiserSpectral", True, {"Denoiser Canopy Denoiser Suppression Linked": 17.899999618530273}),
+        ("Equalizer", True, eq),
+        ("MouthDeclick", True, {"Sensitivity": 5.5, "Frequency skew": 1.0, "Click widening": 0.5}),
+        ("Leveler", True, {"Target Level": -23, "Responsiveness": 3.299999952316284,
+                           "Preserve Dynamic Range": 65, "Ess Reduction": 4, "Ess Reduction Enabled": False}),
+        ("PluginHost", True, {})])                               # no Loudness Control in this chain
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("# mine\n[gate]\nclose_gap_ms = 500.0\n[declick]\n# sensitivity = 4.5\n", encoding="utf-8")
+    for _ in range(2):                                           # importing again replaces, does not duplicate
+        assert main(["import-rx", str(preset), "--config", str(cfg)]) == 0
+    text = cfg.read_text(encoding="utf-8")
+    assert "# mine" in text and text.count("sensitivity =") == 1
+    got, _ = config.load(cfg)
+    assert got["gate"] == {"close_gap_ms": 500.0}                # the user's own settings stay
+    assert got["denoise"] == {"reduction_db": 17.9}
+    assert got["declick"] == {"sensitivity": 5.5, "frequency_skew": 1.0, "click_widening": 0.5}
+    assert got["leveler"] == {"target": -23.0, "responsiveness": 3.3, "preserve": 65.0, "ess_db": 0.0}
+    assert got["stages"] == {"loudness": False} and not got.get("eq")   # EQ written commented out
+    assert '# bands = ["hp:80:4", "peak:3000:+2:1", "lp:18000:8"]' in text
+    assert main(["import-rx", str(preset), "--config", str(cfg), "--eq"]) == 0
+    assert config.load(cfg)[0]["eq"] == {"bands": ["hp:80:4", "peak:3000:+2:1", "lp:18000:8"]}
+    before = cfg.read_text(encoding="utf-8")
+    assert main(["import-rx", str(preset), "--config", str(tmp_path / "new.toml"), "--dry-run"]) == 0
+    assert not (tmp_path / "new.toml").exists() and cfg.read_text(encoding="utf-8") == before
+
+
+def test_import_rx_rejects_other_files(tmp_path):
+    from im4x_chain import rx_preset
+    p = tmp_path / "x.xml"
+    p.write_text("<xml/>", encoding="utf-8")
+    with pytest.raises(ValueError, match="not an RX Module Chain preset"):
+        rx_preset.read_modules(p)
+    with pytest.raises(ValueError, match="RX preset not found"):
+        rx_preset.find(str(tmp_path / "nope"))
