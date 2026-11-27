@@ -433,3 +433,18 @@ def test_import_rx_rejects_other_files(tmp_path):
         rx_preset.read_modules(p)
     with pytest.raises(ValueError, match="RX preset not found"):
         rx_preset.find(str(tmp_path / "nope"))
+
+
+def test_jobs_give_the_same_files(tmp_path):
+    from im4x_chain.cli import main
+    for i, levels in enumerate(([-30, -28, -32], [-26, -34, -29], [-31, -27, -33])):
+        x, _ = speechlike(levels)
+        sf.write(str(tmp_path / f"s{i}.wav"), x, SR, subtype="PCM_24")
+    base = ["process", str(tmp_path / "s0.wav"), str(tmp_path / "s1.wav"), str(tmp_path / "s2.wav"),
+            "--no-deplosive", "--no-declick", "--no-denoise", "--json"]
+    assert main(base + ["-o", str(tmp_path / "one"), "--jobs", "1"]) == 0
+    assert main(base + ["-o", str(tmp_path / "two"), "--jobs", "2"]) == 0
+    for i in range(3):
+        a, _ = sf.read(str(tmp_path / "one" / f"s{i}.wav"))
+        b, _ = sf.read(str(tmp_path / "two" / f"s{i}.wav"))
+        np.testing.assert_array_equal(a, b)

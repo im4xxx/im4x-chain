@@ -2,13 +2,14 @@
 --
 -- The entry scripts set IM4X_MODE ("overwrite" or "take") and dofile() this file.
 -- For every selected item the active take's WAV/FLAC file goes through the im4x-chain CLI,
--- one file at a time, in the background; a window shows the stage and progress bars.
+-- in the background, two files at a time by default ([process] jobs in the CLI's config.toml);
+-- a window shows each running file's stage and progress bars.
 --   overwrite: the file is processed in place (the CLI writes a temp file and swaps it in),
 --              then every item that plays this file is reloaded.
 --   take:      the result is written next to the source as <name>_rx.<ext> and added to
 --              the item as a new, active take; the original file and take stay as they are.
 -- Esc or closing the window cancels: the CLI is killed before it swaps files in, so the
--- file being processed stays untouched; files already finished stay finished.
+-- files being processed stay untouched; files already finished stay finished.
 
 local MODE = _G.IM4X_MODE or "take"
 local TITLE = MODE == "overwrite" and "im4x-chain — перезапись файла" or "im4x-chain — новый тейк"
@@ -400,6 +401,19 @@ local function job_fraction(job, now)
   return math.min(0.95, math.max(0, now - job.started) / job.expected)   -- no stage events (yet)
 end
 
+-- how many files to process at once: [process] jobs from the CLI's settings (default 2)
+local function cli_jobs(cli)
+  local out
+  if IS_WIN then
+    out = select(2, run_wait(winq(cli) .. " config", 30000))
+  else
+    local h = io.popen(shq(cli) .. " config 2>/dev/null")
+    if h then out = h:read("a") h:close() end
+  end
+  local n = tonumber(tostring(out or ""):match("%[process%]%s*jobs = (%d+)"))
+  return math.max(1, math.min(n or 2, 4))
+end
+
 ---------------------------------------------------------------------------- finishing a job
 
 local function finish_job(job)
@@ -456,7 +470,7 @@ end
 
 ---------------------------------------------------------------------------- window
 
-local W, H = 520, 196
+local W = 520
 -- the window is drawn in logical points; SC is the backing scale (2 on Retina), so text is
 -- rendered at the screen's real resolution instead of being upscaled
 local SC = 0
@@ -528,21 +542,28 @@ local function main()
   new_workdir()
   local total_len = 0
   for _, j in ipairs(jobs) do total_len = total_len + math.max(1, j.length) end
+  local slots = math.min(cli_jobs(cli), #jobs)
 
-  local current, done_len, t0 = 0, 0, reaper.time_precise()
-  local job, cancelled, finished_at
+  local started, done_len, t0 = 0, 0, reaper.time_precise()
+  local running = {}                       -- jobs in progress, at most `slots`
+  local cancelled, finished_at
   local results = {}
 
-  local function next_job()
-    current = current + 1
-    job = jobs[current]
-    if not job then return end
-    if MODE == "overwrite" then set_offline(items_of(all_takes_of(job.path)), true) end
-    start_job(job, cli, current, with_progress)
+  local function start_more()
+    while #running < slots and started < #jobs do
+      started = started + 1
+      local job = jobs[started]
+      job.number = started
+      if MODE == "overwrite" then set_offline(items_of(all_takes_of(job.path)), true) end
+      start_job(job, cli, started, with_progress)
+      running[#running + 1] = job
+    end
   end
 
   local function cleanup()
-    if job and not job.finished then cancel_job(job) end
+    for _, j in ipairs(running) do
+      if not j.finished then cancel_job(j) end
+    end
     if work_root then rmtree(work_root) end
   end
   reaper.atexit(cleanup)
@@ -558,16 +579,19 @@ local function main()
     end
     if #bad > 0 or #warns > 0 or cancelled then
       local s = string.format("Готово: %d из %d.", ok, #jobs)
-      if cancelled then s = s .. " Остановлено: текущий файл не изменён, следующие не обработаны." end
+      if cancelled then s = s .. " Остановлено: файлы в работе не изменены, следующие не обработаны." end
       if #bad > 0 then s = s .. "\n\nОшибки:\n" .. table.concat(bad, "\n\n") end
       if #warns > 0 then s = s .. "\n\nПредупреждения:\n" .. table.concat(warns, "\n") end
       msg(s)
     end
   end
 
+  -- one block per running file, then the total bar
+  local BLOCK = 74
+  local H_ = 70 + BLOCK * slots + (#jobs > 1 and 56 or 0)
   gfx.ext_retina = 1                         -- ask for a HiDPI backing store
-  gfx.init(TITLE, W, H)
-  next_job()
+  gfx.init(TITLE, W, H_)
+  start_more()
 
   local function loop()
     local now = reaper.time_precise()
@@ -576,23 +600,30 @@ local function main()
     if not finished_at then
       if ch == -1 or ch == 27 then                          -- closed or Esc
         cancelled = true
-        if job then
-          cancel_job(job)
-          job.finished, job.ok, job.cancelled = true, false, true
-          results[#results + 1] = job
+        for _, j in ipairs(running) do
+          cancel_job(j)
+          j.finished, j.ok, j.cancelled = true, false, true
+          results[#results + 1] = j
         end
+        running = {}
         finished_at = now
-      elseif job then
-        if with_progress then poll_progress(job) end
-        if exists(job.exit_file) then
-          if with_progress then poll_progress(job) end
-          finish_job(job)
-          job.finished = true
-          results[#results + 1] = job
-          done_len = done_len + math.max(1, job.length)
-          next_job()
-          if not job then finished_at = now end
+      else
+        local still = {}
+        for _, j in ipairs(running) do
+          if with_progress then poll_progress(j) end
+          if exists(j.exit_file) then
+            if with_progress then poll_progress(j) end
+            finish_job(j)
+            j.finished = true
+            results[#results + 1] = j
+            done_len = done_len + math.max(1, j.length)
+          else
+            still[#still + 1] = j
+          end
         end
+        running = still
+        start_more()
+        if #running == 0 then finished_at = now end
       end
     end
 
@@ -617,28 +648,35 @@ local function main()
         return
       end
     else
-      local frac = job_fraction(job, now)
-      text(x, 14, fit(string.format("Файл %d из %d: %s", current, #jobs, basename(job.path)), w), 1, 1, 1)
-      gfx.setfont(2)
-      local stage = job.stage and STAGES[job.stage] and STAGES[job.stage][1] or job.stage
-      local line
-      if not with_progress then
-        line = "Обработка… (CLI без --progress-file: этапы не видны, полоса по оценке времени)"
-      elseif stage then
-        line = string.format("Этап %d из %d: %s", job.stage_index or 0, job.stage_total or 0, stage)
-      else
-        line = job.total_weight > 0 and "…" or "Запуск…"
+      local in_work = 0
+      for k, job in ipairs(running) do
+        local y = 14 + (k - 1) * BLOCK
+        local frac = job_fraction(job, now)
+        in_work = in_work + math.max(1, job.length) * frac
+        gfx.setfont(1)
+        text(x, y, fit(string.format("Файл %d из %d: %s", job.number, #jobs, basename(job.path)), w), 1, 1, 1)
+        gfx.setfont(2)
+        local stage = job.stage and STAGES[job.stage] and STAGES[job.stage][1] or job.stage
+        local line
+        if not with_progress then
+          line = "Обработка… (CLI без --progress-file: этапы не видны, полоса по оценке времени)"
+        elseif stage then
+          line = string.format("Этап %d из %d: %s", job.stage_index or 0, job.stage_total or 0, stage)
+        else
+          line = job.total_weight > 0 and "…" or "Запуск…"
+        end
+        text(x, y + 23, fit(line, w), 0.75, 0.75, 0.78)
+        bar(x, y + 43, w, 12, frac, 0.32, 0.6, 0.95)
+        text(x, y + 57, string.format("%d%%   %s", math.floor(frac * 100), fmt_time(now - job.started)), 0.6, 0.6, 0.64)
       end
-      text(x, 38, fit(line, w), 0.75, 0.75, 0.78)
-      bar(x, 60, w, 14, frac, 0.32, 0.6, 0.95)
-      text(x, 80, string.format("%d%%   %s", math.floor(frac * 100), fmt_time(now - job.started)), 0.6, 0.6, 0.64)
       if #jobs > 1 then
-        local all = (done_len + math.max(1, job.length) * frac) / total_len
-        text(x, 106, "Всего", 0.75, 0.75, 0.78)
-        bar(x, 126, w, 10, all, 0.35, 0.75, 0.45)
-        text(x, 140, string.format("%d%%   %s", math.floor(all * 100), fmt_time(now - t0)), 0.6, 0.6, 0.64)
+        local y = 14 + BLOCK * slots + 4
+        local all = (done_len + in_work) / total_len
+        text(x, y, string.format("Всего: готово %d из %d", #results, #jobs), 0.75, 0.75, 0.78)
+        bar(x, y + 20, w, 10, all, 0.35, 0.75, 0.45)
+        text(x, y + 34, string.format("%d%%   %s", math.floor(all * 100), fmt_time(now - t0)), 0.6, 0.6, 0.64)
       end
-      text(x, gfx.h / SC - 24, "Esc или закрыть окно — отмена (текущий файл не изменится)", 0.5, 0.5, 0.54)
+      text(x, gfx.h / SC - 24, "Esc или закрыть окно — отмена (файлы в работе не изменятся)", 0.5, 0.5, 0.54)
     end
     gfx.update()
     reaper.defer(loop)

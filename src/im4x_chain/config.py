@@ -36,6 +36,7 @@ _DECLICK = _RX["mouth_declick"]["settings"]
 
 # section -> key -> (type, default or None when the default is computed per file)
 SCHEMA: dict[str, dict[str, tuple[type, Any]]] = {
+    "process": {"jobs": (int, 2)},
     "stages": {s: (bool, True) for s in STAGES},
     "eq": {"bands": (list, None)},
     "deplosive": {"sensitivity": (float, 5.0), "strength": (float, 5.0), "frequency_limit_hz": (float, None)},
@@ -57,6 +58,7 @@ AUTO = {("eq", "bands"): ("по голосу: hp:70..120:4 (срез под ни
         ("gate", "range_db"): ("глушить полностью", 40.0)}
 
 NOTES = {
+    "process": "jobs — сколько файлов обрабатывать одновременно (как --jobs; 2 быстрее всего)",
     "stages": "этапы цепочки: false — выключить (как --no-<этап>)",
     "eq": "полосы EQ; без bands — срез низа по голосу (70-120 Hz) + lp:18000:8.\n"
           "# формат полосы: hp:F[:порядок] lp:F[:порядок] peak:F:dB[:Q] lowshelf:F:dB[:Q] highshelf:F:dB[:Q]",
@@ -98,6 +100,8 @@ def _check(section: str, key: str, value: Any) -> Any:
         return value
     if not isinstance(value, typ) or (typ is not bool and isinstance(value, bool)):
         raise ValueError(f"config: [{section}] {key} must be {typ.__name__}, got {value!r}")
+    if typ is int and value < 1:
+        raise ValueError(f"config: [{section}] {key} must be 1 or more, got {value!r}")
     return value
 
 

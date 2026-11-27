@@ -70,7 +70,8 @@ def _process(a: argparse.Namespace) -> int:
                        **_given(threshold=a.comp_threshold, ratio=a.comp_ratio, attack=a.comp_attack,
                                 release=a.comp_release, knee=a.comp_knee, makeup=a.comp_makeup)},
             gate_opts=cfg.get("gate"), deplosive_opts=cfg.get("deplosive"), declick_opts=cfg.get("declick"),
-            output_dir=a.output_dir, progress=progress if pf is not None else None)
+            output_dir=a.output_dir, progress=progress if pf is not None else None,
+            jobs=a.jobs if a.jobs is not None else cfg.get("process", {}).get("jobs", 2))
     finally:
         if pf is not None:
             pf.close()
@@ -208,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--progress-file", metavar="PATH",
                     help="write machine-readable progress (JSON lines: begin/stage/done/error) here")
     pr.add_argument("--config", metavar="PATH", help="settings file (default: im4x-chain config --path)")
+    pr.add_argument("-j", "--jobs", type=int, metavar="N",
+                    help="files processed at the same time (default 2; 1 = one after another)")
     pr.set_defaults(func=_process)
 
     co = sub.add_parser("config", help="show the settings in effect, or write a config template")
