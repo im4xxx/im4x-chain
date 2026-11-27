@@ -27,32 +27,51 @@ De-noise, пока фон самый тихий и пока Leveler с комп�
 Заранее нужен установленный iZotope RX 12 (плагины VST3 `RX 12 De-plosive`,
 `RX 12 Mouth De-click`, `RX 12 Spectral De-noise`). Само приложение RX не запускается.
 
+### Проще всего: скачать архив
+
+1. Скачать архив: [im4x-chain-main.zip](https://github.com/im4xxx/im4x-chain/archive/refs/heads/main.zip)
+   (или на странице репозитория: Code → Download ZIP) и распаковать.
+2. Запустить установщик из распакованной папки:
+   - Windows — двойной клик по `install.cmd`;
+   - macOS — двойной клик по `install.command` (в первый раз: правый клик → Открыть,
+     иначе macOS не даст запустить скачанный файл).
+
+Установщик ставит `uv` (если его нет; права администратора не нужны), CLI `im4x-chain`,
+копирует скрипты REAPER в папку `Scripts/im4x_chain` и создаёт файл настроек (если его
+ещё нет). Остаётся один раз загрузить скрипты в REAPER (см. «REAPER»). Обновить — скачать
+архив заново и снова запустить установщик; настройки сохраняются.
+
+### Из командной строки
+
 macOS (нужен [Homebrew](https://brew.sh)):
 
 ```sh
-brew install uv gh
-gh auth login
+brew install uv
 uv tool install git+https://github.com/im4xxx/im4x-chain
 ```
 
-Windows (после первой команды открыть новый терминал):
+Windows — Git не нужен, `uv` ставит прямо из архива (после первой команды открыть новый
+терминал):
 
 ```sh
-winget install astral-sh.uv Git.Git
-uv tool install git+https://github.com/im4xxx/im4x-chain
+winget install astral-sh.uv
+uv tool install https://github.com/im4xxx/im4x-chain/archive/refs/heads/main.zip
 ```
+
+Скрипты REAPER в этом случае копируются вручную (см. «REAPER»).
 
 Всё: команда `im4x-chain` доступна из любой папки. Python и зависимости (numpy, scipy, numba,
 pedalboard, soundfile) `uv` ставит сам.
 
-- Репозиторий закрытый, поэтому нужен вход в GitHub: на macOS — `gh auth login` (выбрать
-  HTTPS и разрешить вход для Git), на Windows окно входа откроется само.
+- Репозиторий открытый, входить в GitHub не нужно. Для установки через `git+https` на macOS
+  нужен `git` из Command Line Tools (если их нет, macOS сама предложит установить).
 - Команда `im4x-chain` не находится — выполнить `uv tool update-shell` и открыть новый терминал.
 - Плагины RX ищутся в `/Library/Audio/Plug-Ins/VST3` (macOS) и
   `C:\Program Files\Common Files\VST3` (Windows), другая папка — переменная
   `IZOTOPE_RX_VST3_DIR`. Без плагинов работают EQ, Leveler, компрессор и Loudness
   (`--no-deplosive --no-declick --no-denoise`).
-- Обновить: `uv tool upgrade im4x-chain`. Удалить: `uv tool uninstall im4x-chain`.
+- Обновить: `uv tool upgrade im4x-chain` (установка по ссылке на архив — та же команда
+  `uv tool install --force --reinstall <ссылка>`). Удалить: `uv tool uninstall im4x-chain`.
 
 ## Запуск
 

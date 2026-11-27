@@ -26,6 +26,10 @@ Windows и Linux.
 
 ## Установка
 
+Проще всего — установщик из архива репозитория (`install.cmd` на Windows,
+`install.command` на macOS): он ставит CLI и сам копирует эту папку в REAPER, остаётся
+шаг 3. Вручную:
+
 1. Установите CLI `im4x-chain` (см. основной README репозитория); на Windows он
    ставится в `%USERPROFILE%\.local\bin\im4x-chain.exe`.
 2. Скопируйте папку `im4x_chain` в папку скриптов REAPER:

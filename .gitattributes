@@ -1,0 +1,3 @@
+# Windows installer files keep CRLF (and the BOM of install.ps1) in the archive
+*.cmd -text
+*.ps1 -text
