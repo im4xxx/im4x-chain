@@ -448,3 +448,56 @@ def test_jobs_give_the_same_files(tmp_path):
         a, _ = sf.read(str(tmp_path / "one" / f"s{i}.wav"))
         b, _ = sf.read(str(tmp_path / "two" / f"s{i}.wav"))
         np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("text, msg", [
+    ('[[plugins]]\nname = "De-ess"\n', "after is required"),
+    ('[[plugins]]\nname = "De-ess"\nafter = "levler"\n', "after must be one of"),
+    ('[[plugins]]\nname = "De-ess"\nafter = "leveler"\nwhen = 1\n', "unknown key 'when'"),
+    ('[[plugins]]\nname = "De-ess"\nafter = "leveler"\n[plugins.settings]\nSpeed = "fast"\n', "must be a number"),
+])
+def test_config_plugins_are_checked(tmp_path, text, msg):
+    from im4x_chain import config
+    p = tmp_path / "c.toml"
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match=msg):
+        config.load(p)
+
+
+def test_config_template_and_dump_with_plugins_parse(tmp_path):
+    import tomllib
+
+    from im4x_chain import config
+    p = tmp_path / "c.toml"
+    p.write_text('[[plugins]]\nname = "De-ess"\nafter = "start"\n[plugins.settings]\n'
+                 '"Gain Reduction Threshold" = -18.0\nSpeed = 1\n', encoding="utf-8")
+    cfg, _ = config.load(p)
+    eff = config.effective(cfg)
+    assert tomllib.loads(config.dump(eff))["plugins"] == cfg["plugins"]
+    assert "plugins" not in tomllib.loads(config.template())                # example is commented out
+
+
+def test_extra_rx_plugin_runs_at_its_place(tmp_path):
+    from im4x_chain import rx_plugins
+    from im4x_chain.cli import main
+    if "De-ess" not in rx_plugins.available_plugins():
+        pytest.skip("RX De-ess not installed")
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal(4 * SR) * 0.05                                 # bright noise: plenty of "ess"
+    src = tmp_path / "s.wav"
+    sf.write(str(src), x, SR, subtype="PCM_24")
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('[stages]\neq = false\ndeplosive = false\ndeclick = false\ndenoise = false\ngate = false\n'
+                   'leveler = false\ncompressor = false\nloudness = false\n'
+                   '[[plugins]]\nname = "De-ess"\nafter = "leveler"\n[plugins.settings]\n'
+                   '"Gain Reduction Threshold" = -40.0\n', encoding="utf-8")
+    pf = tmp_path / "p.jsonl"
+    assert main(["process", str(src), "-o", str(tmp_path / "o"), "--config", str(cfg),
+                 "--progress-file", str(pf)]) == 0
+    y, _ = sf.read(str(tmp_path / "o" / "s.wav"))
+    assert 10 * np.log10(np.mean(y ** 2) / np.mean(x ** 2)) < -3               # the plugin cut the highs
+    assert '"stages": "read,De-ess,write,measure"' in pf.read_text(encoding="utf-8")
+    cfg.write_text(cfg.read_text(encoding="utf-8").replace("-40.0", "-40.0\nTreshold = 1"), encoding="utf-8")
+    with pytest.raises(SystemExit):                                         # a typo stops before any file
+        main(["process", str(src), "-o", str(tmp_path / "o2"), "--config", str(cfg)])
+    assert not (tmp_path / "o2").exists()

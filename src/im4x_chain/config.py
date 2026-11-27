@@ -28,6 +28,8 @@ from im4x_chain.gate import gate
 from im4x_chain.rx_plugins import chain_settings
 
 STAGES = ["eq", "deplosive", "declick", "denoise", "gate", "leveler", "compressor", "loudness"]
+PLACES = ["start"] + STAGES                  # where an extra plugin can go: [[plugins]] after = ...
+PLUGIN_KEYS = {"name": str, "after": str, "settings": dict, "enabled": bool}
 GATE_DEFAULTS = {k: p.default for k, p in inspect.signature(gate).parameters.items()
                  if k not in ("x", "sr") and p.default is not None}
 COMP_KEYS = ["threshold", "ratio", "attack", "release", "knee", "makeup"]
@@ -116,7 +118,9 @@ def load(path: str | os.PathLike | None = None) -> tuple[dict[str, dict[str, Any
         data = tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"config {p}: {e}") from None
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, Any] = {}
+    if "plugins" in data:
+        out["plugins"] = _check_plugins(data.pop("plugins"))
     for section, values in data.items():
         if not isinstance(values, dict):
             raise ValueError(f"config: {section!r} must be a section [{section}]")
@@ -128,9 +132,37 @@ def load(path: str | os.PathLike | None = None) -> tuple[dict[str, dict[str, Any
     return out, p
 
 
-def effective(cfg: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Defaults overlaid with the file (None = computed per file)."""
-    return {s: {k: cfg.get(s, {}).get(k, d) for k, (_, d) in keys.items()} for s, keys in SCHEMA.items()}
+def _check_plugins(value: Any) -> list[dict[str, Any]]:
+    """[[plugins]] tables: name, after, optional settings and enabled. The plugin and its
+    parameter names are checked when the chain starts (that needs the plugin itself)."""
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise ValueError("config: plugins must be [[plugins]] tables")
+    out = []
+    for i, pl in enumerate(value, 1):
+        where = f"[[plugins]] #{i}" + (f" ({pl['name']})" if isinstance(pl.get("name"), str) else "")
+        for k, v in pl.items():
+            if k not in PLUGIN_KEYS:
+                raise ValueError(f"config: {where}: unknown key {k!r} (known: {', '.join(PLUGIN_KEYS)})")
+            if not isinstance(v, PLUGIN_KEYS[k]):
+                raise ValueError(f"config: {where}: {k} must be {PLUGIN_KEYS[k].__name__}, got {v!r}")
+        for k in ("name", "after"):
+            if k not in pl:
+                raise ValueError(f"config: {where}: {k} is required")
+        if pl["after"] not in PLACES:
+            raise ValueError(f"config: {where}: after must be one of {', '.join(PLACES)}, got {pl['after']!r}")
+        for k, v in pl.get("settings", {}).items():
+            if not isinstance(v, (int, float, bool)):
+                raise ValueError(f"config: {where}: settings.{k} must be a number or true/false, got {v!r}")
+        out.append(pl)
+    return out
+
+
+def effective(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Defaults overlaid with the file (None = computed per file); plugins as in the file."""
+    out: dict[str, Any] = {s: {k: cfg.get(s, {}).get(k, d) for k, (_, d) in keys.items()}
+                           for s, keys in SCHEMA.items()}
+    out["plugins"] = cfg.get("plugins", [])
+    return out
 
 
 def _toml(v: Any) -> str:
@@ -155,12 +187,33 @@ def template() -> str:
                 auto, example = AUTO[(section, k)]
                 lines.append(f"# {k} = {_toml(example)}   # пример; по умолчанию — {auto}")
         lines.append("")
+    lines += ["# дополнительные плагины RX (VST3): сколько угодно блоков [[plugins]].",
+              "# name — плагин без \"RX 12\" (список: im4x-chain plugins), after — после какого этапа:",
+              f"# {', '.join(PLACES)} (start — в самом начале). Параметры и их значения по умолчанию:",
+              "# im4x-chain plugins \"De-ess\". Что не указано — по умолчанию плагина.",
+              "# [[plugins]]",
+              "# name = \"De-ess\"",
+              "# after = \"leveler\"",
+              "# enabled = true",
+              "# [plugins.settings]",
+              "# \"Gain Reduction Threshold\" = -18.0",
+              ""]
     return "\n".join(lines)
 
 
-def dump(settings: dict[str, dict[str, Any]]) -> str:
+def dump(settings: dict[str, Any]) -> str:
     lines = []
     for section, keys in settings.items():
+        if section == "plugins":
+            for pl in keys:
+                lines += ["[[plugins]]"] + [f"{k} = {_toml(pl[k])}" for k in ("name", "after", "enabled") if k in pl]
+                if pl.get("settings"):
+                    lines.append("[plugins.settings]")
+                    lines += [f"{_toml(k)} = {_toml(v)}" for k, v in pl["settings"].items()]
+                lines.append("")
+            if not keys:
+                lines += ["# [[plugins]]: нет дополнительных плагинов RX", ""]
+            continue
         lines.append(f"[{section}]")
         for k, v in keys.items():
             lines.append(f"{k} = {_toml(v)}" if v is not None else f"# {k}: {AUTO[(section, k)][0]}")

@@ -128,7 +128,7 @@ def _load(name: str):
     return load_plugin(str(path))
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=8)
 def _default_state(name: str) -> bytes:
     return bytes(_load(name).raw_state)
 
@@ -486,3 +486,97 @@ def _plosive_events(x: np.ndarray, y: np.ndarray, sr: int) -> list[tuple[float, 
     d = np.diff(np.r_[0, (cut > 6).astype(np.int8), 0])
     return [(a * n / sr, float(cut[a:b].max())) for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1))
             if cut[a:b].max() > PLOSIVE_CUT_DB]
+
+
+# ----------------------------------------------------------------------------- any RX plugin
+
+# RX plugins that do not process audio on their own (links to the RX app, metering)
+NOT_PROCESSORS = ("Connect", "Monitor", "Repair Assistant")
+
+
+def available_plugins() -> dict[str, str]:
+    """Short name ("De-ess") -> VST3 file name ("RX 12 De-ess.vst3"); the newest RX wins."""
+    out: dict[str, tuple[int, str]] = {}
+    for p in VST3_DIR.glob("RX * *.vst3") if VST3_DIR.is_dir() else []:
+        m = re.match(r"RX (\d+) (.+)\.vst3$", p.name)
+        if m and m.group(2) not in NOT_PROCESSORS:
+            ver, short = int(m.group(1)), m.group(2)
+            if short not in out or ver > out[short][0]:
+                out[short] = (ver, p.name)
+    return {k: v[1] for k, v in sorted(out.items())}
+
+
+def plugin_file(name: str) -> str:
+    plugins = available_plugins()
+    if name in plugins.values():
+        return name
+    for short, file in plugins.items():
+        if short.lower() == name.lower() or file.lower() == name.lower():
+            return file
+    raise ValueError(f"RX plugin {name!r} not found in {VST3_DIR} "
+                     f"(available: {', '.join(plugins) or 'none'})")
+
+
+def plugin_params(name: str) -> dict[str, dict[str, tuple[str, Any]]]:
+    """Module -> parameter -> (type, default) of an RX plugin, from its state."""
+    _, j = _unpack(_default_state(plugin_file(name)))
+    out = {}
+    for module, el in _elements(j).items():
+        vals = {k: (v.get("Type"), v.get("Value")) for k, v in el["Value"].items()
+                if isinstance(v, dict) and v.get("Type") in ("Float", "UInt", "Int", "Bool")
+                and k not in ("Param Version", "Global Bypass")}
+        if vals:
+            out[module] = vals
+    return out
+
+
+def _coerce(typ: str, value: Any, what: str) -> Any:
+    if typ == "Bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{what} must be true or false, got {value!r}")
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{what} must be a number, got {value!r}")
+    if typ in ("UInt", "Int"):
+        if float(value) != int(value) or (typ == "UInt" and value < 0):
+            raise ValueError(f"{what} must be a whole number{' >= 0' if typ == 'UInt' else ''}, got {value!r}")
+        return int(value)
+    return float(value)
+
+
+def plugin_state(name: str, settings: dict[str, Any] | None = None) -> tuple[bytes, dict[str, Any]]:
+    """The plugin's default state with ``settings`` applied: {"Parameter": value} or
+    {"Module.Parameter": value} when two modules have the same parameter name.
+    Returns (state, the settings as applied {"Module.Parameter": value})."""
+    file = plugin_file(name)
+    ctx, j = _unpack(_default_state(file))
+    els = _elements(j)
+    params = plugin_params(file)
+    applied = {}
+    for key, value in (settings or {}).items():
+        if "." in key and key.split(".", 1)[0] in params:
+            module, par = key.split(".", 1)
+            hits = [module] if par in params[module] else []
+        else:
+            par = key
+            hits = [m for m, ps in params.items() if par in ps]
+        if not hits:
+            known = "; ".join(f"{m}: {', '.join(ps)}" for m, ps in params.items())
+            raise ValueError(f"{name}: unknown parameter {key!r} (known — {known})")
+        if len(hits) > 1:
+            raise ValueError(f"{name}: {key!r} is in several modules, write it as "
+                             + " or ".join(f"'{m}.{par}'" for m in hits))
+        module = hits[0]
+        v = _coerce(params[module][par][0], value, f"{name}: {key}")
+        els[module]["Value"][par]["Value"] = v
+        applied[f"{module}.{par}"] = v
+    return _pack(ctx, j), applied
+
+
+def rx_plugin(x: np.ndarray, sr: int, name: str, settings: dict[str, Any] | None = None
+              ) -> tuple[np.ndarray, dict[str, Any]]:
+    """Any RX VST3 plugin with its default settings plus ``settings``. Rendered like the
+    chain's own RX stages: non-silent stretches in pieces with context, on all cores."""
+    raw, applied = plugin_state(name, settings)
+    file = plugin_file(name)
+    return _render(file, raw, x, sr), {"plugin": file, "settings": applied}

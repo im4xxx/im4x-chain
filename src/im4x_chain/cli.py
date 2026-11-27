@@ -9,6 +9,7 @@ EQ -> De-plosive (where needed) -> Mouth De-click -> Spectral De-noise -> Gate -
     im4x-chain measure FILES_OR_DIRS...
     im4x-chain config [--init [--force]] [--path] [--config PATH]
     im4x-chain import-rx [PRESET] [--eq] [--dry-run] [--config PATH]
+    im4x-chain plugins [NAME]
 
 Files are changed in place unless ``-o`` is given. Exit code 1 if any file failed.
 Settings: built-in defaults < the config file (``im4x-chain config --path``) < flags.
@@ -70,6 +71,7 @@ def _process(a: argparse.Namespace) -> int:
                        **_given(threshold=a.comp_threshold, ratio=a.comp_ratio, attack=a.comp_attack,
                                 release=a.comp_release, knee=a.comp_knee, makeup=a.comp_makeup)},
             gate_opts=cfg.get("gate"), deplosive_opts=cfg.get("deplosive"), declick_opts=cfg.get("declick"),
+            plugins=None if a.no_plugins else cfg.get("plugins"),
             output_dir=a.output_dir, progress=progress if pf is not None else None,
             jobs=a.jobs if a.jobs is not None else cfg.get("process", {}).get("jobs", 2))
     finally:
@@ -135,6 +137,30 @@ def _config(a: argparse.Namespace) -> int:
     cfg, used = config.load(a.config)
     print(f"# config: {used if used else str(path) + ' (not found, built-in defaults)'}\n")
     print(config.dump(config.effective(cfg)))
+    return 0
+
+
+def _plugins(a: argparse.Namespace) -> int:
+    from im4x_chain import rx_plugins
+    if not a.name:
+        found = rx_plugins.available_plugins()
+        print(f"RX plugins in {rx_plugins.VST3_DIR}:")
+        for short, file in found.items():
+            print(f"  {short:<20} {file}")
+        if not found:
+            print("  (none; another folder: IZOTOPE_RX_VST3_DIR)")
+        print('\nparameters of one: im4x-chain plugins "De-ess"')
+        return 0
+    file = rx_plugins.plugin_file(a.name)
+    params = rx_plugins.plugin_params(file)
+    print(f"# {file}: parameters and their defaults, for [plugins.settings]")
+    names = [p for ps in params.values() for p in ps]
+    for module, ps in params.items():
+        print(f"\n# module {module}")
+        for k, (typ, v) in ps.items():
+            key = k if names.count(k) == 1 else f"{module}.{k}"
+            print(f"{config._toml(key)} = {config._toml(v) if typ != 'Float' else config._toml(float(v))}"
+                  f"   # {typ}")
     return 0
 
 
@@ -209,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--progress-file", metavar="PATH",
                     help="write machine-readable progress (JSON lines: begin/stage/done/error) here")
     pr.add_argument("--config", metavar="PATH", help="settings file (default: im4x-chain config --path)")
+    pr.add_argument("--no-plugins", action="store_true", help="skip the extra RX plugins of the config")
     pr.add_argument("-j", "--jobs", type=int, metavar="N",
                     help="files processed at the same time (default 2; 1 = one after another)")
     pr.set_defaults(func=_process)
@@ -219,6 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--path", action="store_true", help="print the config file location")
     co.add_argument("--config", metavar="PATH", help="another settings file")
     co.set_defaults(func=_config)
+
+    pl = sub.add_parser("plugins", help="list RX plugins for [[plugins]] in the config, or one plugin's parameters")
+    pl.add_argument("name", nargs="?", help='plugin, e.g. "De-ess"')
+    pl.set_defaults(func=_plugins)
 
     ir = sub.add_parser("import-rx", help="take settings from an RX Module Chain preset into the config")
     ir.add_argument("preset", nargs="?", help="preset name from the RX folder or a path to .xml; none = list presets")

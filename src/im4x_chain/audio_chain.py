@@ -86,14 +86,19 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
                  use_declick: bool = True, use_deplosive: bool = True,
                  progress: Progress | None = None, use_gate: bool = True,
                  gate_opts: dict[str, Any] | None = None, deplosive_opts: dict[str, float] | None = None,
-                 declick_opts: dict[str, float] | None = None) -> dict[str, Any]:
+                 declick_opts: dict[str, float] | None = None,
+                 plugins: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """``eq_bands``: None = default EQ (low cut matched to the voice, 70-120 Hz, and an
     18 kHz low-pass), [] = no EQ. ``use_deplosive``: run De-plosive and keep it where needed.
     ``denoise_reduction_db``: None = the chain's Reduction (16 dB).
 
     ``progress``: optional callback for a UI (the CLI's ``--progress-file``). It receives
     ``begin`` (stage list), ``stage`` start/done events, ``done`` (loudness before/after) and
-    ``error`` events. A failing callback never interrupts the audio processing."""
+    ``error`` events. A failing callback never interrupts the audio processing.
+
+    ``plugins``: extra RX plugins, each {"name": "De-ess", "after": "leveler", "settings": {...}};
+    ``after`` is a stage of the chain or "start" (before the EQ). A plugin keeps its place even
+    when that stage is switched off."""
     emit = progress or (lambda _event: None)
 
     def notify(event: dict[str, Any]) -> None:
@@ -107,16 +112,26 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
     if path.suffix.lower() not in AUDIO_EXT:
         raise ValueError(f"unsupported file type: {path.name} (WAV or FLAC)")
 
+    # extra RX plugins by their place in the chain; a stage id per plugin ("De-ess", "De-ess 2")
+    extra: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    used: dict[str, int] = {}
+    for pl in plugins or []:
+        if not pl.get("enabled", True):
+            continue
+        used[pl["name"]] = used.get(pl["name"], 0) + 1
+        sid = pl["name"] + ("" if used[pl["name"]] == 1 else f" {used[pl['name']]}")
+        extra.setdefault(pl.get("after", "leveler"), []).append((sid, pl))
+
     stages = ["read"]
+    stages += [sid for sid, _ in extra.get("start", [])]
     if eq_bands is None:
         stages.append("voice")
-    if eq_bands is None or eq_bands:
-        stages.append("eq")
-    for name, enabled in (("deplosive", use_deplosive), ("declick", use_declick),
-                          ("denoise", use_denoise), ("gate", use_gate), ("leveler", use_leveler),
-                          ("compressor", use_comp), ("loudness", use_loudness)):
+    for name, enabled in (("eq", eq_bands is None or bool(eq_bands)), ("deplosive", use_deplosive),
+                          ("declick", use_declick), ("denoise", use_denoise), ("gate", use_gate),
+                          ("leveler", use_leveler), ("compressor", use_comp), ("loudness", use_loudness)):
         if enabled:
             stages.append(name)
+        stages += [sid for sid, _ in extra.get(name, [])]
     stages += ["write", "measure"]
     stage_no = {name: i + 1 for i, name in enumerate(stages)}
     notify({"event": "begin", "file": str(path), "stages": ",".join(stages), "total": len(stages),
@@ -146,6 +161,11 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         timings[name] = round(time.time() - t, 2)
         end_stage(name, t)
 
+    def plugins_after(place: str) -> None:
+        for sid, pl in extra.get(place, []):
+            stage(sid, rx_plugins.rx_plugin, pl["name"], pl.get("settings"))
+
+    plugins_after("start")
     applied_eq: list[str] = []
     if eq_bands is None or eq_bands:
         voice = None
@@ -159,20 +179,28 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         stage("eq", equalize, applied_eq)
         if voice is not None:
             entry["eq"]["voice"] = voice
+    plugins_after("eq")
     if use_deplosive:
         stage("deplosive", rx_plugins.deplosive, **(deplosive_opts or {}))
+    plugins_after("deplosive")
     if use_declick:
         stage("declick", rx_plugins.mouth_declick, **(declick_opts or {}))
+    plugins_after("declick")
     if use_denoise:
         stage("denoise", rx_plugins.spectral_denoise, denoise_reduction_db, eq_bands=applied_eq)
+    plugins_after("denoise")
     if use_gate:
         stage("gate", gate, **(gate_opts or {}))
+    plugins_after("gate")
     if use_leveler:
         stage("leveler", leveler, **{**LEVELER_DEFAULTS, **(leveler_opts or {})})
+    plugins_after("leveler")
     if use_comp:
         stage("compressor", compress, **{**COMP_DEFAULTS, **(comp_opts or {})})
+    plugins_after("compressor")
     if use_loudness:                               # last: exact LUFS target and true-peak ceiling
         stage("loudness", loudness_control, **{**LOUDNESS_DEFAULTS, **(loudness_opts or {})})
+    plugins_after("loudness")
     entry["timings_s"] = timings
     clipped = int((np.abs(y) > 1.0).sum())
     if clipped and info.subtype.startswith("PCM"):
@@ -229,7 +257,8 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
                   use_declick: bool = True, use_deplosive: bool = True,
                   progress: Progress | None = None, use_gate: bool = True,
                   gate_opts: dict[str, Any] | None = None, deplosive_opts: dict[str, float] | None = None,
-                  declick_opts: dict[str, float] | None = None, jobs: int = 1) -> dict[str, Any]:
+                  declick_opts: dict[str, float] | None = None, jobs: int = 1,
+                  plugins: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """``jobs``: files processed at the same time, each in its own process. Two use the cores
     best (the RX plugins already spread one file over all cores; the rest of the chain is
     mostly one core): two 24-minute files take 34 s instead of 46. Results are identical
@@ -239,13 +268,16 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
         from im4x_chain.eq import parse_band
         for b in eq_bands:
             parse_band(b)
+    for pl in plugins or []:                       # unknown plugin or parameter: fail before any file
+        if pl.get("enabled", True):
+            rx_plugins.plugin_state(pl["name"], pl.get("settings"))
     files = expand_paths(paths)
     opts = {"use_leveler": use_leveler, "use_loudness": use_loudness, "leveler_opts": leveler_opts,
             "loudness_opts": loudness_opts, "output_dir": Path(output_dir) if output_dir else None,
             "eq_bands": eq_bands, "use_comp": use_comp, "comp_opts": comp_opts, "use_denoise": use_denoise,
             "denoise_reduction_db": denoise_reduction_db, "use_declick": use_declick,
             "use_deplosive": use_deplosive, "use_gate": use_gate, "gate_opts": gate_opts,
-            "deplosive_opts": deplosive_opts, "declick_opts": declick_opts}
+            "deplosive_opts": deplosive_opts, "declick_opts": declick_opts, "plugins": plugins}
     workers = min(max(1, int(jobs)), len(files))
     if workers > 1 and progress is None:
         import multiprocessing
