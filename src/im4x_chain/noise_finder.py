@@ -17,11 +17,9 @@ flat residual; speech or clicks inside the region show up as bumps.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-import soundfile as sf
 
 FRAME = 2048
 HOP = 512
@@ -51,15 +49,10 @@ class NoiseRegion:
         return d
 
 
-def _load_mono(path: Path, max_seconds: float | None = None) -> tuple[np.ndarray, int]:
-    info = sf.info(str(path))
-    frames = -1 if max_seconds is None else int(max_seconds * info.samplerate)
-    data, sr = sf.read(str(path), frames=frames, dtype="float32", always_2d=True)
-    return data.mean(axis=1), sr
-
-
 def _stft_db(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return (frame_level_db [n], spectrum_db [n, bins])."""
+    if len(x) < FRAME:                              # shorter than one frame: pad with silence
+        x = np.pad(x, (0, FRAME - len(x)))
     n = 1 + max(0, (len(x) - FRAME) // HOP)
     win = np.hanning(FRAME).astype(np.float32)
     levels = np.empty(n, dtype=np.float32)
@@ -92,25 +85,19 @@ def _smooth(v: np.ndarray, width: int = 31) -> np.ndarray:
 
 
 def find_noise_regions(
-    path: str | Path,
+    x: np.ndarray,
+    sr: int,
     min_duration: float = 0.25,
     max_duration: float = 4.0,
     edge_window: float = 15.0,
     guard: float = 0.06,
     floor_margin_db: float = 6.0,
     max_candidates: int = 8,
-    audio: tuple[np.ndarray, int] | None = None,
 ) -> dict[str, Any]:
-    """Return noise-only candidate regions, best first.
-
-    ``audio`` = (samples, sample_rate) analyses that array instead of reading ``path``
-    (``(n,)`` or ``(n, ch)``; channels are averaged)."""
-    path = Path(path)
-    if audio is None:
-        x, sr = _load_mono(path)
-    else:
-        x, sr = np.asarray(audio[0], dtype=np.float32), int(audio[1])
-        x = x.mean(axis=1) if x.ndim == 2 else x
+    """Return noise-only candidate regions of ``x`` (``(n,)`` or ``(n, ch)``; channels are
+    averaged), best first."""
+    x = np.asarray(x, dtype=np.float32)
+    x = x.mean(axis=1) if x.ndim == 2 else x
     duration = len(x) / sr
     levels, specs = _stft_db(x)
     t = (np.arange(len(levels)) * HOP + FRAME / 2) / sr
@@ -173,7 +160,6 @@ def find_noise_regions(
     cands.sort(key=lambda c: c.score, reverse=True)
     return {
         "ok": bool(cands),
-        "file": str(path),
         "duration": round(duration, 3),
         "sample_rate": sr,
         "floor_db": round(floor, 2),
@@ -181,70 +167,3 @@ def find_noise_regions(
         "content": [round(content_start, 3), round(content_end, 3)],
         **({} if cands else {"error": f"no noise-only stretch of {min_duration}s found"}),
     }
-
-
-def build_noise_sample(
-    path: str | Path,
-    out: str | Path,
-    target_seconds: float = 2.0,
-    max_pieces: int = 12,
-    crossfade: float = 0.01,
-    skip: int = 0,
-    **find_kwargs: Any,
-) -> dict[str, Any]:
-    """Write a noise-only WAV for Learn, from one region or several spliced pauses.
-
-    Takes candidates best-first (start, end, then pauses) until ``target_seconds`` is
-    reached. Pieces are joined with short equal-power crossfades so the splice points do
-    not add clicks to the profile. ``skip`` drops the best N candidates (a retry when
-    the first choice gave a bad residual curve).
-    """
-    found = find_noise_regions(path, max_candidates=max_pieces + skip, **find_kwargs)
-    found["candidates"] = found["candidates"][skip:]
-    if not found["candidates"]:
-        return {**found, "ok": False,
-                "error": found.get("error") or f"no noise candidate left after skipping {skip}"}
-    info = sf.info(str(path))
-    sr = info.samplerate
-    xf = max(1, int(crossfade * sr))
-    pieces, used, total = [], [], 0.0
-    for c in found["candidates"]:
-        a, b = int(c["start"] * sr), int(c["end"] * sr)
-        data, _ = sf.read(str(path), start=a, stop=b, dtype="float32", always_2d=True)
-        pieces.append(data)
-        used.append(c)
-        total += c["duration"]
-        if total >= target_seconds:
-            break
-    joined = pieces[0]
-    fade_in = np.sin(np.linspace(0, np.pi / 2, xf, dtype=np.float32))[:, None]
-    fade_out = np.cos(np.linspace(0, np.pi / 2, xf, dtype=np.float32))[:, None]
-    for nxt in pieces[1:]:
-        if len(joined) > xf and len(nxt) > xf:
-            mix = joined[-xf:] * fade_out + nxt[:xf] * fade_in
-            joined = np.concatenate([joined[:-xf], mix, nxt[xf:]])
-        else:
-            joined = np.concatenate([joined, nxt])
-    out = Path(out)
-    subtype = info.subtype if info.subtype in ("PCM_16", "PCM_24") else "FLOAT"
-    sf.write(str(out), joined, sr, subtype=subtype)
-    return {
-        "ok": total >= min(target_seconds, 0.5),
-        "file": str(path),
-        "noise_wav": str(out),
-        "seconds": round(len(joined) / sr, 3),
-        "pieces": used,
-        "floor_db": found["floor_db"],
-        **({} if total >= target_seconds else {"warning": f"only {total:.2f}s of noise found"}),
-    }
-
-
-def write_region(path: str | Path, start: float, end: float, out: str | Path) -> Path:
-    """Copy [start, end) seconds of ``path`` (all channels, original rate) to a WAV."""
-    info = sf.info(str(path))
-    a, b = int(start * info.samplerate), int(end * info.samplerate)
-    data, sr = sf.read(str(path), start=a, stop=b, dtype="float32", always_2d=True)
-    out = Path(out)
-    subtype = {"PCM_16": "PCM_16", "PCM_24": "PCM_24"}.get(info.subtype, "FLOAT")
-    sf.write(str(out), data, sr, subtype=subtype)
-    return out

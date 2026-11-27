@@ -501,3 +501,54 @@ def test_extra_rx_plugin_runs_at_its_place(tmp_path):
     with pytest.raises(SystemExit):                                         # a typo stops before any file
         main(["process", str(src), "-o", str(tmp_path / "o2"), "--config", str(cfg)])
     assert not (tmp_path / "o2").exists()
+
+
+def test_gate_leaves_a_file_without_pauses_alone():
+    from im4x_chain.gate import gate
+    x, spans = _gate_scene()
+    a, b = spans["word2"]                         # a tightly cut word: no pause, no floor
+    y, info = gate(x[a:b], SR)
+    assert not info["applied"]
+    np.testing.assert_array_equal(y, x[a:b])
+
+
+def test_files_are_taken_once_and_outputs_must_not_clash(tmp_path):
+    from im4x_chain import audio_chain
+    from im4x_chain.cli import main
+    x, _ = speechlike([-30, -28, -32])
+    for d in ("a", "b"):
+        (tmp_path / d).mkdir()
+        sf.write(str(tmp_path / d / "x.wav"), x, SR, subtype="PCM_24")
+    f = tmp_path / "a" / "x.wav"
+    assert audio_chain.expand_paths([str(tmp_path / "a"), str(f), str(tmp_path / "a" / ".." / "a" / "x.wav")]) == [f]
+    with pytest.raises(SystemExit):              # both would be written to out/x.wav
+        main(["process", str(f), str(tmp_path / "b" / "x.wav"), "-o", str(tmp_path / "out")])
+    assert not (tmp_path / "out").exists()
+
+
+@needs_rx_plugins
+def test_short_file_without_noise_skips_denoise_only(tmp_path):
+    from im4x_chain.cli import main
+    t = np.arange(int(1.0 * SR)) / SR
+    x = 0.1 * sum(np.sin(2 * np.pi * 160 * k * t) / k for k in range(1, 6))   # a word, no pause
+    src = tmp_path / "w.wav"
+    sf.write(str(src), x, SR, subtype="PCM_24")
+    out = tmp_path / "o"
+    assert main(["process", str(src), "-o", str(out), "--no-deplosive", "--no-declick"]) == 0
+    y, _ = sf.read(str(out / "w.wav"))
+    assert integrated_lufs(y, SR) == pytest.approx(-24.0, abs=0.1)          # the rest of the chain ran
+
+
+def test_in_place_replaces_the_file_and_leaves_no_temp(tmp_path):
+    from im4x_chain.cli import main
+    x, _ = speechlike([-34, -30, -36])
+    src = tmp_path / "take.flac"
+    sf.write(str(src), x, SR, subtype="PCM_24", format="FLAC")
+    before = src.read_bytes()
+    assert main(["process", str(src), "--no-deplosive", "--no-declick", "--no-denoise", "--json"]) == 0
+    assert src.read_bytes() != before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["take.flac"]          # no .im4xchain.tmp left
+    info = sf.info(str(src))
+    assert (info.format, info.subtype, info.frames, info.samplerate) == ("FLAC", "PCM_24", len(x), SR)
+    y, _ = sf.read(str(src))
+    assert integrated_lufs(y, SR) == pytest.approx(-24.0, abs=0.1)

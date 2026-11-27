@@ -315,8 +315,7 @@ def _noise_sample(x: np.ndarray, sr: int, skip: int, target_s: float = 2.0) -> t
     the best noise stretch, whole, not cut to its quietest 4 s), and ~4 s of other pauses of the
     recording. The tail/start and the pauses can carry different hum or rumble; the profile
     takes the louder of the two at each frequency. ``skip`` drops the best N candidates (a retry)."""
-    found = noise_finder.find_noise_regions("<memory>", max_candidates=16 + skip, audio=(x, sr),
-                                            max_duration=NOISE_MAX_S)
+    found = noise_finder.find_noise_regions(x, sr, max_candidates=16 + skip, max_duration=NOISE_MAX_S)
     cands = found.get("candidates", [])
     mono = x.mean(1) if x.ndim == 2 else x
     tail = None
@@ -406,8 +405,8 @@ def spectral_denoise(x: np.ndarray, sr: int, reduction_db: float | None = None,
         try:
             noise, used = _noise_sample(x, sr, skip)
         except RuntimeError as e:
-            if not tries:
-                raise
+            if not tries:                           # no pause with only noise (a short line):
+                return x.copy(), {"applied": False, "skipped": f"no noise to learn from ({e})"}
             tries.append({"error": str(e)})
             break
         raw, rep = tune_denoise(noise, sr, reduction_db, eq_bands=eq_bands)
@@ -416,7 +415,7 @@ def spectral_denoise(x: np.ndarray, sr: int, reduction_db: float | None = None,
             break
     best = min((t for t in tries if "raw" in t), key=lambda t: t["residual_max_db"])
     y = _render(DENOISE_PLUGIN, best.pop("raw"), x, sr)
-    info = {**best, "attempts": len(tries),
+    info = {"applied": True, **best, "attempts": len(tries),
             "reduction_db": reduction_db if reduction_db is not None else
             chain_settings()["spectral_denoise"]["settings"]["Denoiser Canopy Denoiser Suppression Linked"]}
     return y, info

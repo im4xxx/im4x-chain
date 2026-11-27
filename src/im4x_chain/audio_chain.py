@@ -53,14 +53,32 @@ LOUDNESS_DEFAULTS = {"target": -24.0, "ceiling": -3.0}
 
 
 def expand_paths(paths: list[str]) -> list[Path]:
+    """Files and the audio files of folders, each file once (a file named twice, or also
+    through its folder, would otherwise go through the chain twice)."""
     out: list[Path] = []
+    seen: set[Path] = set()
     for p in paths:
         q = Path(p).expanduser()
-        if q.is_dir():
-            out += sorted(f for f in q.iterdir() if f.suffix.lower() in AUDIO_EXT and not f.name.startswith("."))
-        else:
-            out.append(q)
+        found = (sorted(f for f in q.iterdir() if f.suffix.lower() in AUDIO_EXT and not f.name.startswith("."))
+                 if q.is_dir() else [q])
+        for f in found:
+            key = f.resolve()
+            if key not in seen:
+                seen.add(key)
+                out.append(f)
     return out
+
+
+def _check_outputs(files: list[Path], output_dir: str | None) -> None:
+    """Two inputs must not end up in the same output file (same name from two folders)."""
+    if not output_dir:
+        return
+    by_name: dict[str, Path] = {}
+    for f in files:
+        other = by_name.setdefault(f.name.lower(), f)
+        if other is not f:
+            raise ValueError(f"{other} and {f} would both be written to "
+                             f"{Path(output_dir) / f.name}; process them into different folders")
 
 
 def _to_pcm(y: np.ndarray, subtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -202,9 +220,14 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         stage("loudness", loudness_control, **{**LOUDNESS_DEFAULTS, **(loudness_opts or {})})
     plugins_after("loudness")
     entry["timings_s"] = timings
+    warnings = []
+    if entry.get("denoise", {}).get("applied") is False:
+        warnings.append("De-noise skipped: no pause with only noise to learn from (a short or tightly cut file)")
     clipped = int((np.abs(y) > 1.0).sum())
     if clipped and info.subtype.startswith("PCM"):
-        entry["warning"] = f"{clipped} samples above 0 dBFS were clipped; enable loudness control or lower the target"
+        warnings.append(f"{clipped} samples above 0 dBFS were clipped; enable loudness control or lower the target")
+    if warnings:
+        entry["warning"] = "; ".join(warnings)
     dest = (Path(output_dir).expanduser() / path.name) if output_dir else path
     dest.parent.mkdir(parents=True, exist_ok=True)
     t = begin_stage("write")
@@ -249,35 +272,30 @@ def _process_one(f: Path, opts: dict[str, Any], progress: Progress | None = None
         return {"ok": False, "file": str(f), "error": msg}
 
 
-def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool = True,
-                  leveler_opts: dict[str, float] | None = None, loudness_opts: dict[str, float] | None = None,
-                  output_dir: str | None = None, eq_bands: list[str] | None = None,
-                  use_comp: bool = True, comp_opts: dict[str, float] | None = None,
-                  use_denoise: bool = True, denoise_reduction_db: float | None = None,
-                  use_declick: bool = True, use_deplosive: bool = True,
-                  progress: Progress | None = None, use_gate: bool = True,
-                  gate_opts: dict[str, Any] | None = None, deplosive_opts: dict[str, float] | None = None,
-                  declick_opts: dict[str, float] | None = None, jobs: int = 1,
-                  plugins: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """``jobs``: files processed at the same time, each in its own process. Two use the cores
+def process_files(paths: list[str], output_dir: str | None = None, jobs: int = 1,
+                  progress: Progress | None = None, **opts: Any) -> dict[str, Any]:
+    """Every file of ``paths`` (files or folders) through ``process_file``; ``opts`` are its
+    settings (stages, their options, ``eq_bands``, ``plugins``) and go to it as they are.
+
+    ``jobs``: files processed at the same time, each in its own process. Two use the cores
     best (the RX plugins already spread one file over all cores; the rest of the chain is
     mostly one core): two 24-minute files take 34 s instead of 46. Results are identical
     and in the order of ``paths``. With ``progress`` files go one at a time, so the events
     of one file are not mixed with another's."""
-    if eq_bands:                                   # fail fast on a typo, before touching files
+    import inspect
+    known = set(inspect.signature(process_file).parameters) - {"path", "output_dir", "progress"}
+    unknown = set(opts) - known
+    if unknown:                                    # a misspelt setting would fail every file
+        raise TypeError(f"process_files: unknown settings {sorted(unknown)}")
+    for b in opts.get("eq_bands") or []:           # fail fast on a typo, before touching files
         from im4x_chain.eq import parse_band
-        for b in eq_bands:
-            parse_band(b)
-    for pl in plugins or []:                       # unknown plugin or parameter: fail before any file
+        parse_band(b)
+    for pl in opts.get("plugins") or []:           # unknown plugin or parameter: fail before any file
         if pl.get("enabled", True):
             rx_plugins.plugin_state(pl["name"], pl.get("settings"))
     files = expand_paths(paths)
-    opts = {"use_leveler": use_leveler, "use_loudness": use_loudness, "leveler_opts": leveler_opts,
-            "loudness_opts": loudness_opts, "output_dir": Path(output_dir) if output_dir else None,
-            "eq_bands": eq_bands, "use_comp": use_comp, "comp_opts": comp_opts, "use_denoise": use_denoise,
-            "denoise_reduction_db": denoise_reduction_db, "use_declick": use_declick,
-            "use_deplosive": use_deplosive, "use_gate": use_gate, "gate_opts": gate_opts,
-            "deplosive_opts": deplosive_opts, "declick_opts": declick_opts, "plugins": plugins}
+    _check_outputs(files, output_dir)
+    opts["output_dir"] = Path(output_dir) if output_dir else None
     workers = min(max(1, int(jobs)), len(files))
     if workers > 1 and progress is None:
         import multiprocessing

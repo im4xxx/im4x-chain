@@ -91,7 +91,7 @@ def _process(a: argparse.Namespace) -> int:
                 note = "  (target not reached without distortion)"
             print(f"ok   {r['output']}\n     {_fmt(r['before'])}  ->  {_fmt(r['after'])}  "
                   f"[{r['seconds']} s]{note}")
-            if "denoise" in r:
+            if r.get("denoise", {}).get("applied"):
                 d = r["denoise"]
                 print(f"     de-noise: residual max {d['residual_max_db']} dB, spread {d['residual_spread_db']} dB, "
                       f"bump {d['residual_bump_db']} dB" + ("" if d["passed"] else "  (not flat / below -120 dB)"))

@@ -26,6 +26,8 @@ deciding:
 5. Everything else is attenuated by ``range_db`` (None = muted). Kept events open
    ``lookahead_ms`` early with a ``attack_ms`` raised-cosine fade-in and close after
    ``hold_ms`` with a ``release_ms`` fade-out, so word onsets and tails are not cut.
+6. A file without pauses (floor less than ``MIN_RANGE_DB`` under the reference, e.g. a
+   tightly cut line) is left as it is: there is nothing to tell speech from noise.
 
 Measured on a 24-minute dubbing file after De-noise: speech events peak at -15..-25 dBFS
 (reference -19), breaths between phrases at -60..-90 dBFS, 200-500 ms; mouth clicks are
@@ -41,6 +43,10 @@ from scipy.ndimage import find_objects, label, median_filter
 from scipy.signal import butter, sosfilt
 
 FRAME_S = 0.005
+# the gate needs pauses: the floor (10th percentile) must be this far under the speech. A
+# tightly cut word or phrase has no pauses, its "floor" is speech, and every sound would be
+# taken for noise (a 0.4-0.8 s cut came out as silence); such files are left as they are.
+MIN_RANGE_DB = 30.0
 
 
 def _levels(x: np.ndarray, sr: float) -> tuple[np.ndarray, np.ndarray, int]:
@@ -90,6 +96,9 @@ def gate(x: np.ndarray, sr: float, keep_db: float = -20.0, min_loud_ms: float = 
         return x.copy(), {"applied": False, "reason": "no audio"}
     ref = float(np.percentile(lv[~silent], 95))
     floor = float(np.percentile(lv[~silent], 10))
+    if ref - floor < MIN_RANGE_DB:                  # no pauses: nothing tells speech from noise
+        return x.copy(), {"applied": False, "reason": "no pauses to tell speech from noise",
+                          "reference_db": round(ref, 1), "floor_db": round(floor, 1)}
     event_db = max(floor + 15.0, ref - 50.0)
     events, _ = label(lv > event_db)
     spans = [(sl[0].start, sl[0].stop) for sl in find_objects(events)]
