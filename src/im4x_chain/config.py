@@ -25,38 +25,44 @@ from typing import Any
 
 from im4x_chain.audio_chain import COMP_DEFAULTS, LEVELER_DEFAULTS, LOUDNESS_DEFAULTS
 from im4x_chain.gate import gate
+from im4x_chain.rx_plugins import chain_settings
 
 STAGES = ["eq", "deplosive", "declick", "denoise", "gate", "leveler", "compressor", "loudness"]
 GATE_DEFAULTS = {k: p.default for k, p in inspect.signature(gate).parameters.items()
                  if k not in ("x", "sr") and p.default is not None}
 COMP_KEYS = ["threshold", "ratio", "attack", "release", "knee", "makeup"]
+_RX = chain_settings()                       # the values of the RX Module Chain the plugins use
+_DECLICK = _RX["mouth_declick"]["settings"]
 
 # section -> key -> (type, default or None when the default is computed per file)
 SCHEMA: dict[str, dict[str, tuple[type, Any]]] = {
     "stages": {s: (bool, True) for s in STAGES},
     "eq": {"bands": (list, None)},
     "deplosive": {"sensitivity": (float, 5.0), "strength": (float, 5.0), "frequency_limit_hz": (float, None)},
-    "declick": {"sensitivity": (float, None), "frequency_skew": (float, None), "click_widening": (float, None)},
-    "denoise": {"reduction_db": (float, None)},
+    "declick": {"sensitivity": (float, float(_DECLICK["Sensitivity"])),
+                "frequency_skew": (float, float(_DECLICK["Frequency skew"])),
+                "click_widening": (float, float(_DECLICK["Click widening"]))},
+    "denoise": {"reduction_db": (float, float(_RX["spectral_denoise"]["settings"]
+                                              ["Denoiser Canopy Denoiser Suppression Linked"]))},
     "gate": {**{k: (type(v), v) for k, v in GATE_DEFAULTS.items()}, "range_db": (float, None)},
     "leveler": {k: (float, v) for k, v in LEVELER_DEFAULTS.items()},
     "compressor": {k: (float, COMP_DEFAULTS[k]) for k in COMP_KEYS},
     "loudness": {k: (float, v) for k, v in LOUDNESS_DEFAULTS.items()},
 }
 
-# examples for the settings whose default is computed per file
-EXAMPLES = {("eq", "bands"): ["hp:90:4", "lp:18000:8"], ("deplosive", "frequency_limit_hz"): 120.0,
-            ("declick", "sensitivity"): 4.0, ("declick", "frequency_skew"): 0.0,
-            ("declick", "click_widening"): 0.0, ("denoise", "reduction_db"): 16.0,
-            ("gate", "range_db"): 40.0}
+# settings without a fixed default: what is used then, and an example value
+AUTO = {("eq", "bands"): ("по голосу: hp:70..120:4 (срез под нижний тон голоса) + lp:18000:8",
+                          ["hp:90:4", "lp:18000:8"]),
+        ("deplosive", "frequency_limit_hz"): ("по голосу: 0.8 x нижний тон, 60-200 Hz", 120.0),
+        ("gate", "range_db"): ("глушить полностью", 40.0)}
 
 NOTES = {
     "stages": "этапы цепочки: false — выключить (как --no-<этап>)",
     "eq": "полосы EQ; без bands — срез низа по голосу (70-120 Hz) + lp:18000:8.\n"
           "# формат полосы: hp:F[:порядок] lp:F[:порядок] peak:F:dB[:Q] lowshelf:F:dB[:Q] highshelf:F:dB[:Q]",
     "deplosive": "плагин RX De-plosive; frequency_limit_hz без значения — 0.8 x нижний тон голоса (60-200 Hz)",
-    "declick": "плагин RX Mouth De-click; без значений — из Module Chain RX",
-    "denoise": "плагин RX Spectral De-noise; reduction_db без значения — из Module Chain RX (16 dB)",
+    "declick": "плагин RX Mouth De-click; по умолчанию — значения из Module Chain RX",
+    "denoise": "плагин RX Spectral De-noise; reduction_db по умолчанию — из Module Chain RX",
     "gate": "гейт: щелчки и шумы вокруг фраз; keep_breaths — оставлять звук между близкими словами\n"
             "# и хвост после фразы; range_db без значения — глушить полностью",
     "leveler": "Leveler: target LUFS, preserve — % разницы между фразами",
@@ -142,7 +148,8 @@ def template() -> str:
             if d is not None:
                 lines.append(f"# {k} = {_toml(d)}")
             else:
-                lines.append(f"# {k} = {_toml(EXAMPLES[(section, k)])}   # пример; по умолчанию — см. выше")
+                auto, example = AUTO[(section, k)]
+                lines.append(f"# {k} = {_toml(example)}   # пример; по умолчанию — {auto}")
         lines.append("")
     return "\n".join(lines)
 
@@ -152,6 +159,6 @@ def dump(settings: dict[str, dict[str, Any]]) -> str:
     for section, keys in settings.items():
         lines.append(f"[{section}]")
         for k, v in keys.items():
-            lines.append(f"{k} = {_toml(v)}" if v is not None else f"# {k}: не задан (см. config --init)")
+            lines.append(f"{k} = {_toml(v)}" if v is not None else f"# {k}: {AUTO[(section, k)][0]}")
         lines.append("")
     return "\n".join(lines)
