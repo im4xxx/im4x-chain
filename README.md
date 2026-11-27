@@ -70,8 +70,29 @@ pedalboard, soundfile) `uv` ставит сам.
   `C:\Program Files\Common Files\VST3` (Windows), другая папка — переменная
   `IZOTOPE_RX_VST3_DIR`. Без плагинов работают EQ, Leveler, компрессор и Loudness
   (`--no-deplosive --no-declick --no-denoise`).
-- Обновить: `uv tool upgrade im4x-chain` (установка по ссылке на архив — та же команда
-  `uv tool install --force --reinstall <ссылка>`). Удалить: `uv tool uninstall im4x-chain`.
+- Удалить: `uv tool uninstall im4x-chain`.
+
+### Обновление
+
+Настройки (`config.toml`) при обновлении не трогаются.
+
+- **Установщик из архива:** скачать архив заново, распаковать и снова запустить
+  `install.cmd` / `install.command`. CLI пересоберётся, скрипты в REAPER заменятся;
+  загружать действия в REAPER заново не нужно.
+- **Из командной строки** — той же командой, что ставили, с `--force --reinstall`:
+
+  ```sh
+  # macOS
+  uv tool install --force --reinstall git+https://github.com/im4xxx/im4x-chain
+  # Windows
+  uv tool install --force --reinstall https://github.com/im4xxx/im4x-chain/archive/refs/heads/main.zip
+  ```
+
+  `uv tool upgrade` здесь не подходит: номер версии не меняется, и uv может решить, что
+  обновлять нечего. Скрипты REAPER в этом случае обновляются вручную: папку `im4x_chain`
+  из нового архива скопировать поверх старой.
+- **Из клона:** `git pull`, затем `uv tool install --force .` и скопировать папку
+  `im4x_chain` в папку скриптов REAPER.
 
 ## Запуск
 
