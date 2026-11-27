@@ -96,6 +96,9 @@ True peak считается своим полифазным ядром на `nu
 этап и время. Оба скрипта вызывают установленный CLI `im4x-chain`; установка и настройки —
 в [`reaper/README.md`](reaper/README.md).
 
+Вторая, независимая версия тех же двух действий с полосой прогресса и отменой по Esc — в
+[`reaper/claude/`](reaper/claude/README.md).
+
 ## Разработка
 
 Код: [`eq.py`](src/im4x_chain/eq.py), [`leveler.py`](src/im4x_chain/leveler.py),
