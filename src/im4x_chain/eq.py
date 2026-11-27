@@ -9,9 +9,9 @@ Bands are written as short strings, as on the command line (``--eq``):
 * ``lowshelf:200:-2[:0.707]`` / ``highshelf:8000:+1.5[:0.707]`` — shelves (gain dB, slope Q).
 
 Filters are causal IIR (minimum phase, like an analog EQ); peak/shelf use the RBJ cookbook
-biquads. Default chain: ``["hp:70", "lp:18000:8"]`` (the EQ item of the user's RX Module Chain: Band 1
-low cut 70 Hz, Band 8 high cut 18 kHz 48 dB/oct) — cut rumble and hum below speech and
-everything above 18 kHz.
+biquads. Default: a low cut matched to the voice (``voice_bands``: 0.55 x its low pitch,
+70-120 Hz, 24 dB/oct) and ``lp:18000:8``; ``DEFAULT_BANDS`` = ``["hp:70", "lp:18000:8"]`` (the EQ
+item of the user's RX Module Chain) is used when the pitch cannot be found.
 """
 
 from __future__ import annotations

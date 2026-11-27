@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "im4x-chain"
 version = "0.1.0"
-description = "Voice chain for voice-over recordings without the iZotope RX app: EQ, RX 12 plugins (De-plosive, Mouth De-click, Spectral De-noise), Leveler, compressor, Loudness Control"
+description = "Voice chain for voice-over recordings without the iZotope RX app: EQ, RX 12 plugins (De-plosive, Mouth De-click, Spectral De-noise), gate, Leveler, compressor, Loudness Control"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

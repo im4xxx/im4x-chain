@@ -22,6 +22,10 @@ EQ (свой, срез низа по голосу) → De-plosive (плагин 
 De-noise, пока фон самый тихий и пока Leveler с компрессором не подняли то, что осталось
 между фразами.
 
+Все настройки задаются в `config.toml` (см. «Настройки»); там же можно вставить в цепочку
+другие плагины RX (De-ess, Breath Control, …) и перенести значения из своего пресета
+Module Chain. Скрипты REAPER (`im4x_chain/`) запускают ту же цепочку на выделенных айтемах.
+
 ## Установка
 
 Заранее нужен установленный iZotope RX 12 (плагины VST3 `RX 12 De-plosive`,
@@ -249,15 +253,19 @@ Windows, Linux):
 - `im4x_chain_take.lua` — пишет результат рядом с исходником как `<имя>_rx.wav/.flac` и
   добавляет его **новым тейком**, оригинал остаётся нетронутым.
 
-Выделяете один или несколько айтемов, запускаете действие — цепочка идёт в фоне, окно
-показывает файл, этап и полосу прогресса; Esc отменяет. Скрипты вызывают установленный CLI
+Выделяете один или несколько айтемов, запускаете действие — цепочка идёт в фоне, по два
+файла одновременно; окно показывает каждый файл в работе, этап и полосу прогресса; Esc
+отменяет. Настройки берутся из того же `config.toml`, что у CLI. Скрипты вызывают установленный CLI
 `im4x-chain`; установка и подробности — в [`im4x_chain/README.md`](im4x_chain/README.md).
 
 ## Разработка
 
 Код: [`eq.py`](src/im4x_chain/eq.py), [`leveler.py`](src/im4x_chain/leveler.py),
-[`loudness.py`](src/im4x_chain/loudness.py), [`compressor.py`](src/im4x_chain/compressor.py), плагины RX —
-[`rx_plugins.py`](src/im4x_chain/rx_plugins.py), обвязка по файлам —
+[`loudness.py`](src/im4x_chain/loudness.py), [`compressor.py`](src/im4x_chain/compressor.py),
+[`gate.py`](src/im4x_chain/gate.py), плагины RX — [`rx_plugins.py`](src/im4x_chain/rx_plugins.py)
+(поиск шума для Learn — [`noise_finder.py`](src/im4x_chain/noise_finder.py)), настройки —
+[`config.py`](src/im4x_chain/config.py), пресеты Module Chain —
+[`rx_preset.py`](src/im4x_chain/rx_preset.py), обвязка по файлам —
 [`audio_chain.py`](src/im4x_chain/audio_chain.py), командная строка —
 [`cli.py`](src/im4x_chain/cli.py). Тесты —
 `tests/test_audio_chain.py`.

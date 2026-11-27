@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("paths", nargs="+", help="WAV/FLAC files or folders")
     pr.add_argument("-o", "--output-dir", help="write results here instead of replacing the files")
     pr.add_argument("--eq", action="append", metavar="BAND",
-                    help=f"EQ band, repeatable; replaces the default {DEFAULT_BANDS}. "
+                    help=f"EQ band, repeatable; replaces the default (low cut matched to the voice, 70-120 Hz, + {DEFAULT_BANDS[1]}). "
                          "hp:F[:order] lp:F[:order] peak:F:dB[:Q] lowshelf:F:dB[:Q] highshelf:F:dB[:Q]")
     pr.add_argument("--no-eq", action="store_true", help="skip the EQ stage")
     pr.add_argument("--no-denoise", action="store_true", help="skip Spectral De-noise (RX plugin)")
@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Spectral De-noise Reduction, dB (default: the chain's, 16)")
     pr.add_argument("--no-declick", action="store_true", help="skip Mouth De-click (RX plugin)")
     pr.add_argument("--no-gate", action="store_true",
-                    help="skip the gate (clicks and noises around phrases; breaths stay)")
+                    help="skip the gate (clicks and noises around phrases; keeps the sound between close words and phrase tails)")
     pr.add_argument("--no-deplosive", action="store_true",
                     help="skip De-plosive (RX plugin; by default kept only on files with plosives)")
     pr.add_argument("--no-leveler", action="store_true")

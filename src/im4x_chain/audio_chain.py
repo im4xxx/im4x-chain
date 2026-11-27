@@ -10,11 +10,13 @@ EQ (own; low cut matched to the voice, 70-120 Hz, + 18 kHz low-pass)
 Clicks go before the noise: they would otherwise end up in the noise profile and get smeared
 by the spectral processing. Loudness Control is last so the result hits the loudness target
 and the true-peak ceiling exactly (a compressor after it would leave the file 1-2 LU quiet).
-The gate silences clicks and noises around phrases (breaths stay) right after De-noise, where the
-noise floor is lowest and before Leveler and the compressor raise what is left between phrases.
+The gate silences clicks and noises around phrases right after De-noise, where the noise
+floor is lowest and before Leveler and the compressor raise what is left between phrases; it
+keeps what is between close words and the tails of phrases.
 
-The two RX stages host the RX 12 VST3 plugins (``rx_plugins``) with the settings of the
-user's Module Chain; RX itself does not run.
+The three RX stages host the RX 12 VST3 plugins (``rx_plugins``): De-noise and Mouth De-click
+with the settings of the user's Module Chain, De-plosive with its own. RX itself does not run.
+More RX plugins can be put anywhere in the chain from the config (``plugins``).
 WAV keeps its subtype; FLAC is re-encoded to FLAC with the same bit depth (written directly by
 libsndfile; tags and cover are not copied). Files are written in place unless ``output_dir`` is
 given; every write goes through a temporary file that replaces the target at the end.

@@ -125,7 +125,7 @@ def test_flac_round_trip_keeps_bit_depth(tmp_path) -> None:
     assert sf.read(str(src))[0] == pytest.approx(x, abs=1e-6)                # source untouched
 
 
-def test_eq_default_is_60hz_highpass() -> None:
+def test_eq_highpass_is_3db_down_and_24db_per_octave() -> None:
     from im4x_chain.eq import response_db
     r = response_db(["hp:60"], SR, np.array([15.0, 30.0, 60.0, 120.0, 1000.0]))
     assert r[2] == pytest.approx(-3.0, abs=0.1)                               # -3 dB at 60 Hz

@@ -1,4 +1,5 @@
-"""Spectral De-noise and Mouth De-click from RX 12, run as VST3 plugins without the RX app.
+"""RX 12 plugins run as VST3 without the RX app: the chain's De-noise, Mouth De-click and
+De-plosive, and any other RX plugin put into the chain from the config (``rx_plugin``).
 
 The plugins ship with RX 12 (``/Library/Audio/Plug-Ins/VST3/RX 12 *.vst3`` on macOS,
 ``C:\\Program Files\\Common Files\\VST3`` on Windows; ``IZOTOPE_RX_VST3_DIR`` overrides) and are hosted
