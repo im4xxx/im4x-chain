@@ -47,6 +47,14 @@ reaper.SetExtState("im4x_chain", "cli", "/Users/me/im4x-chain/.venv/bin/im4x-cha
 reaper.SetExtState("im4x_chain", "cli", [[C:\Users\me\im4x-chain\.venv\Scripts\im4x-chain.exe]], true)
 ```
 
+## Настройки цепочки
+
+Скрипты запускают CLI с его настройками: значения по умолчанию и файл
+`config.toml` (macOS/Linux: `~/.config/im4x-chain/config.toml`, Windows:
+`%APPDATA%\im4x-chain\config.toml`). Изменения в файле действуют со следующего запуска,
+переустанавливать ничего не нужно. Создать файл-шаблон: `im4x-chain config --init`; подробности —
+в основном README репозитория (раздел «Настройки»).
+
 ## Как это устроено
 
 CLI запускается в фоне через небольшой скрипт-обёртку во временной папке: на macOS и Linux —

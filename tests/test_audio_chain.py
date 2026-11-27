@@ -166,7 +166,7 @@ def test_progress_file_reports_stages_and_result(tmp_path) -> None:
     sf.write(str(src), x, SR, subtype="PCM_24")
     out, prog = tmp_path / "o", tmp_path / "progress.jsonl"
     args = ["process", str(src), "-o", str(out), "--no-eq", "--no-deplosive", "--no-declick",
-            "--no-denoise", "--no-leveler", "--no-comp", "--no-loudness",
+            "--no-denoise", "--no-gate", "--no-leveler", "--no-comp", "--no-loudness",
             "--progress-file", str(prog)]
     assert main(args) == 0
     events = [json.loads(line) for line in prog.read_text().splitlines() if line.strip()]
@@ -259,3 +259,117 @@ def test_plugin_render_in_chunks_matches_whole_file() -> None:
     p.raw_state = raw
     ref = p.process(x[None].astype(np.float32), SR, buffer_size=4096)[0]
     assert 10 * np.log10(np.sum((y - ref) ** 2) / np.sum(ref ** 2) + 1e-30) < -50
+
+
+def _gate_scene():
+    """Clicks, breaths before / between / after / away from phrases, a quiet isolated word."""
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal(8 * SR) * 10 ** (-95 / 20)                   # residual noise floor
+
+    def voiced(n, db):
+        t = np.arange(n) / SR
+        s = sum(np.sin(2 * np.pi * 160 * k * t) / k for k in range(1, 8))
+        s *= np.hanning(n) ** 0.2
+        return s * 10 ** (db / 20) / np.sqrt(np.mean(s ** 2))
+
+    def breath(n, db):
+        b = np.convolve(rng.standard_normal(n), np.ones(4) / 4, "same")
+        r = int(0.02 * SR)
+        env = np.ones(n)
+        env[:r], env[-r:] = np.linspace(0, 1, r), np.linspace(1, 0, r)
+        return b * env * 10 ** (db / 20) / np.sqrt(np.mean(b ** 2))
+
+    def at(t0, t1):
+        return int(t0 * SR), int(t1 * SR)
+
+    spans = {"click": at(1.0, 1.01), "breath_before": at(1.5, 1.85), "phrase": at(2.0, 2.6),
+             "gap": at(2.6, 2.85), "word2": at(2.85, 3.4), "tail": at(3.4, 3.7),
+             "tail_click": at(3.6, 3.61), "lone_breath": at(5.0, 5.3), "quiet_word": at(6.5, 6.75)}
+    for name, make, db in (("phrase", voiced, -20), ("word2", voiced, -20), ("quiet_word", voiced, -42),
+                           ("breath_before", breath, -75), ("gap", breath, -75), ("tail", breath, -75),
+                           ("lone_breath", breath, -75)):     # breaths after De-noise: 50-65 dB under speech
+        a, b = spans[name]
+        x[a:b] += make(b - a, db)
+    for name in ("click", "tail_click"):
+        a, b = spans[name]
+        x[a:b] += rng.standard_normal(b - a) * 10 ** (-40 / 20)
+    return x, spans
+
+
+def test_gate_keeps_speech_gaps_and_tails_removes_the_rest():
+    from im4x_chain.gate import gate
+    x, spans = _gate_scene()
+    y, info = gate(x, SR)
+    assert info["applied"] and info["gaps_kept"] >= 1 and info["tails"] >= 1 and info["clicks_cut"] >= 1
+
+    def rms_db(v):
+        return 10 * np.log10(np.mean(v ** 2) + 1e-30)
+
+    for name in ("click", "breath_before", "lone_breath", "tail_click"):
+        a, b = spans[name]
+        assert rms_db(y[a:b]) < rms_db(x[a:b]) - 40, name
+    for name in ("phrase", "gap", "word2", "quiet_word"):
+        a, b = spans[name]
+        np.testing.assert_allclose(y[a:b], x[a:b], err_msg=name)        # untouched
+    a, _ = spans["phrase"]
+    assert np.all(y[a - int(0.015 * SR):a] == x[a - int(0.015 * SR):a])  # lookahead before the onset
+    a, b = spans["tail"]
+    np.testing.assert_allclose(y[a:a + int(0.1 * SR)], x[a:a + int(0.1 * SR)], err_msg="tail start")
+    assert np.all(np.abs(y[b - int(0.01 * SR):b]) < np.abs(x[b - int(0.01 * SR):b]) + 1e-12)  # fading out
+    y2, _ = gate(x, SR, keep_breaths=False)
+    a, b = spans["gap"]
+    assert rms_db(y2[a + int(0.12 * SR):b - int(0.04 * SR)]) < rms_db(x[a:b]) - 40  # breaths can go too
+
+
+def test_gate_range_and_stereo():
+    from im4x_chain.gate import gate
+    x, spans = _gate_scene()
+    st = np.stack([x, 0.5 * x], axis=1)
+    y, _ = gate(st, SR, range_db=20)
+    a, b = spans["click"]
+    np.testing.assert_allclose(y[a:b], st[a:b] * 0.1, rtol=1e-9)        # -20 dB, both channels
+
+
+def test_config_template_parses_and_is_all_defaults(tmp_path, monkeypatch):
+    import tomllib
+
+    from im4x_chain import config
+    from im4x_chain.cli import main
+    monkeypatch.setenv("IM4X_CHAIN_CONFIG", str(tmp_path / "c.toml"))
+    assert main(["config", "--init"]) == 0
+    text = (tmp_path / "c.toml").read_text(encoding="utf-8")
+    assert tomllib.loads(text) == {s: {} for s in config.SCHEMA}         # every value commented out
+    cfg, used = config.load()
+    assert used == tmp_path / "c.toml" and config.effective(cfg)["loudness"]["target"] == -24.0
+    assert main(["config", "--init"]) == 1                                 # no silent overwrite
+
+
+@pytest.mark.parametrize("text, msg", [("[gate]\nkep_db = -20\n", "unknown key"),
+                                       ("[louds]\ntarget = -23\n", "unknown section"),
+                                       ("[loudness]\ntarget = \"-23\"\n", "must be float"),
+                                       ("[stages]\ngate = 1\n", "must be bool"),
+                                       ("[eq]\nbands = [\"hp:abc\"]\n", None)])
+def test_config_rejects_typos(tmp_path, text, msg):
+    from im4x_chain import config
+    p = tmp_path / "c.toml"
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match=msg):
+        config.load(p)
+
+
+def test_config_file_applies_and_flags_win(tmp_path):
+    from im4x_chain.cli import main
+    x, _ = speechlike([-30, -28, -32])
+    src = tmp_path / "s.wav"
+    sf.write(str(src), x, SR, subtype="PCM_24")
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("[stages]\ndeplosive = false\ndeclick = false\ndenoise = false\ncompressor = false\n"
+                   "[loudness]\ntarget = -20.0\n[gate]\nkeep_breaths = false\n", encoding="utf-8")
+    base = ["process", str(src), "--no-eq", "--config", str(cfg), "--json"]
+    for extra, want in (([], -20.0), (["--target", "-22"], -22.0)):
+        out = tmp_path / f"o{len(extra)}"
+        assert main(base + ["-o", str(out)] + extra) == 0
+        y, _ = sf.read(str(out / "s.wav"))
+        assert abs(integrated_lufs(y, SR) - want) < 0.05
+    with pytest.raises(SystemExit):                                       # a named file must exist
+        main(base + ["-o", str(tmp_path / "o9"), "--config", str(tmp_path / "missing.toml")])

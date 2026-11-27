@@ -4,12 +4,14 @@
 
 EQ (own; low cut matched to the voice, 70-120 Hz, + 18 kHz low-pass)
 -> De-plosive (RX plugin, kept only when the file has plosives) -> Mouth De-click (RX plugin)
--> Spectral De-noise (RX plugin, own Learn + curve tuning) -> Leveler (own)
+-> Spectral De-noise (RX plugin, own Learn + curve tuning) -> Gate (own) -> Leveler (own)
 -> compressor (own X-Comp model) -> Loudness Control (own).
 
 Clicks go before the noise: they would otherwise end up in the noise profile and get smeared
 by the spectral processing. Loudness Control is last so the result hits the loudness target
 and the true-peak ceiling exactly (a compressor after it would leave the file 1-2 LU quiet).
+The gate silences clicks and noises around phrases (breaths stay) right after De-noise, where the
+noise floor is lowest and before Leveler and the compressor raise what is left between phrases.
 
 The two RX stages host the RX 12 VST3 plugins (``rx_plugins``) with the settings of the
 user's Module Chain; RX itself does not run.
@@ -32,6 +34,7 @@ import soundfile as sf
 from im4x_chain import rx_plugins
 from im4x_chain.compressor import XCOMP_DEFAULTS, compress
 from im4x_chain.eq import equalize, voice_bands
+from im4x_chain.gate import gate
 from im4x_chain.leveler import leveler
 from im4x_chain.loudness import loudness_control, measure
 
@@ -81,7 +84,9 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
                  use_comp: bool = True, comp_opts: dict[str, float] | None = None,
                  use_denoise: bool = True, denoise_reduction_db: float | None = None,
                  use_declick: bool = True, use_deplosive: bool = True,
-                 progress: Progress | None = None) -> dict[str, Any]:
+                 progress: Progress | None = None, use_gate: bool = True,
+                 gate_opts: dict[str, Any] | None = None, deplosive_opts: dict[str, float] | None = None,
+                 declick_opts: dict[str, float] | None = None) -> dict[str, Any]:
     """``eq_bands``: None = default EQ (low cut matched to the voice, 70-120 Hz, and an
     18 kHz low-pass), [] = no EQ. ``use_deplosive``: run De-plosive and keep it where needed.
     ``denoise_reduction_db``: None = the chain's Reduction (16 dB).
@@ -108,7 +113,7 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
     if eq_bands is None or eq_bands:
         stages.append("eq")
     for name, enabled in (("deplosive", use_deplosive), ("declick", use_declick),
-                          ("denoise", use_denoise), ("leveler", use_leveler),
+                          ("denoise", use_denoise), ("gate", use_gate), ("leveler", use_leveler),
                           ("compressor", use_comp), ("loudness", use_loudness)):
         if enabled:
             stages.append(name)
@@ -155,11 +160,13 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
         if voice is not None:
             entry["eq"]["voice"] = voice
     if use_deplosive:
-        stage("deplosive", rx_plugins.deplosive)
+        stage("deplosive", rx_plugins.deplosive, **(deplosive_opts or {}))
     if use_declick:
-        stage("declick", rx_plugins.mouth_declick)
+        stage("declick", rx_plugins.mouth_declick, **(declick_opts or {}))
     if use_denoise:
         stage("denoise", rx_plugins.spectral_denoise, denoise_reduction_db, eq_bands=applied_eq)
+    if use_gate:
+        stage("gate", gate, **(gate_opts or {}))
     if use_leveler:
         stage("leveler", leveler, **{**LEVELER_DEFAULTS, **(leveler_opts or {})})
     if use_comp:
@@ -207,7 +214,9 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
                   use_comp: bool = True, comp_opts: dict[str, float] | None = None,
                   use_denoise: bool = True, denoise_reduction_db: float | None = None,
                   use_declick: bool = True, use_deplosive: bool = True,
-                  progress: Progress | None = None) -> dict[str, Any]:
+                  progress: Progress | None = None, use_gate: bool = True,
+                  gate_opts: dict[str, Any] | None = None, deplosive_opts: dict[str, float] | None = None,
+                  declick_opts: dict[str, float] | None = None) -> dict[str, Any]:
     if eq_bands:                                   # fail fast on a typo, before touching files
         from im4x_chain.eq import parse_band
         for b in eq_bands:
@@ -220,7 +229,9 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
                                                        loudness_opts, Path(output_dir) if output_dir else None,
                                                        eq_bands, use_comp, comp_opts, use_denoise,
                                                        denoise_reduction_db, use_declick, use_deplosive,
-                                                       progress=progress)})
+                                                       progress=progress, use_gate=use_gate,
+                                                       gate_opts=gate_opts, deplosive_opts=deplosive_opts,
+                                                       declick_opts=declick_opts)})
         except Exception as e:  # noqa: BLE001 - report per file, keep going
             msg = f"{type(e).__name__}: {e}"
             if progress is not None:

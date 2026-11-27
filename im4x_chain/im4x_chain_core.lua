@@ -22,7 +22,7 @@ local SUFFIX = "_rx"                    -- take mode: <name>_rx.<ext>
 local STAGES = {
   read = { "Чтение", 2 }, voice = { "Тон голоса", 3 }, eq = { "EQ", 2 },
   deplosive = { "De-plosive", 12 }, declick = { "Mouth De-click", 15 },
-  denoise = { "Spectral De-noise", 35 }, leveler = { "Leveler", 8 },
+  denoise = { "Spectral De-noise", 35 }, gate = { "Гейт", 2 }, leveler = { "Leveler", 8 },
   compressor = { "Компрессор", 3 }, loudness = { "Loudness", 5 },
   write = { "Запись", 5 }, measure = { "Замер", 4 },
 }
