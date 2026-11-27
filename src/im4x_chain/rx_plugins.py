@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 
-from rx_audio import noise_finder
+from im4x_chain import noise_finder
 
 _VST3_DEFAULT = (r"C:\Program Files\Common Files\VST3" if os.name == "nt"
                  else "/Library/Audio/Plug-Ins/VST3")
@@ -234,14 +234,14 @@ def tune_denoise(noise: Noise, sr: int, reduction_db: float | None = None, round
     below the goal keep the base reduction instead of being raised to it, and the verdict does
     not count them as unevenness. The output of the plugin on the noise is measured once at the end, for the report.
     """
-    from rx_audio.residual import FLATNESS_DB, verdict
+    from im4x_chain.residual import FLATNESS_DB, verdict
     st = DenoiseState(noise, sr, reduction_db)
     base = float(st.el["Denoiser Canopy Denoiser Suppression Linked"]["Value"])
     lowest = -(MAX_REDUCTION_DB - base)              # table value v gives reduction base - v
     fb = np.fft.rfftfreq(2048, 1 / sr)
     prof = _profile_db(noise, 1025)
     if eq_bands:                                    # tune on the noise as it was before the EQ
-        from rx_audio.eq import response_db
+        from im4x_chain.eq import response_db
         prof = prof - np.clip(response_db(eq_bands, sr, np.maximum(fb, 1.0)), -40.0, 40.0)
     band = (fb >= 60) & (fb <= 16000)
     floor = float(np.percentile(prof[band], 5))      # quietest bands of the noise itself

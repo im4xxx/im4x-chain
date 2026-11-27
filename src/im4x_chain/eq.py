@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 from scipy.signal import butter, resample_poly, sosfilt
 
-from rx_audio.chunks import chunked
+from im4x_chain.chunks import chunked
 
 DEFAULT_BANDS = ["hp:70", "lp:18000:8"]     # = the EQ item of the RX Module Chain
 LOW_CUT_RANGE = (70.0, 120.0)               # voice-matched low cut: low voices 70 Hz, high ones up to 120

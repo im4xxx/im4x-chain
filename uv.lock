@@ -453,7 +453,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rx-audio"
+name = "im4x-chain"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

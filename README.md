@@ -1,4 +1,4 @@
-# rx-audio — цепочка обработки озвучки без приложения RX
+# im4x-chain — цепочка обработки озвучки без приложения RX
 
 Цепочка на Python (`numpy` + `scipy`); приложение RX для неё не запускается. Три этапа —
 это плагины RX 12 (VST3), которые цепочка открывает сама через `pedalboard` (Spectral
@@ -18,37 +18,46 @@ EQ (свой, срез низа по голосу) → De-plosive (плагин 
   на 1.1–1.7 LU (у RX то же самое — −25.2…−25.8 LUFS при цели −24). Теперь цель и потолок
   true peak выполняются точно: −24.00 LUFS, true peak не выше −3 dBTP.
 
-Код: [`eq.py`](src/rx_audio/eq.py), [`leveler.py`](src/rx_audio/leveler.py),
-[`loudness.py`](src/rx_audio/loudness.py), [`compressor.py`](src/rx_audio/compressor.py), плагины RX —
-[`rx_plugins.py`](src/rx_audio/rx_plugins.py), обвязка по файлам —
-[`audio_chain.py`](src/rx_audio/audio_chain.py), командная строка —
-[`cli.py`](src/rx_audio/cli.py). Тесты — `tests/test_audio_chain.py` (`uv run pytest`).
+## Установка
 
-## Что нужно
+Заранее нужен установленный iZotope RX 12 (плагины VST3 `RX 12 De-plosive`,
+`RX 12 Mouth De-click`, `RX 12 Spectral De-noise`). Само приложение RX не запускается.
 
-- Python 3.11+ и [uv](https://docs.astral.sh/uv/) (или pip);
-- установленный iZotope RX 12 (плагины VST3 `RX 12 De-plosive`, `RX 12 Mouth De-click`,
-  `RX 12 Spectral De-noise`): macOS — `/Library/Audio/Plug-Ins/VST3`, Windows —
-  `C:\Program Files\Common Files\VST3`, другая папка — переменная `IZOTOPE_RX_VST3_DIR`.
-  Само приложение RX не запускается. Без плагинов работают EQ, Leveler, компрессор и Loudness
-  (`--no-deplosive --no-declick --no-denoise`);
-- для FLAC — `metaflac` (пакет FLAC: `brew install flac`, на Windows — flac с xiph.org в
-  `PATH`), им копируются теги и обложка. Без него FLAC не обрабатываются.
-
-Зависимости Python: numpy, scipy, numba, pedalboard, soundfile.
-
-## Запуск
+macOS (нужен [Homebrew](https://brew.sh)):
 
 ```sh
-uv sync
+brew install uv gh
+gh auth login
+uv tool install git+https://github.com/im4xxx/im4x-chain
 ```
+
+Windows (после первой команды открыть новый терминал):
+
+```sh
+winget install astral-sh.uv Git.Git
+uv tool install git+https://github.com/im4xxx/im4x-chain
+```
+
+Всё: команда `im4x-chain` доступна из любой папки. Python и зависимости (numpy, scipy, numba,
+pedalboard, soundfile) `uv` ставит сам.
+
+- Репозиторий закрытый, поэтому нужен вход в GitHub: на macOS — `gh auth login` (выбрать
+  HTTPS и разрешить вход для Git), на Windows окно входа откроется само.
+- Команда `im4x-chain` не находится — выполнить `uv tool update-shell` и открыть новый терминал.
+- Плагины RX ищутся в `/Library/Audio/Plug-Ins/VST3` (macOS) и
+  `C:\Program Files\Common Files\VST3` (Windows), другая папка — переменная
+  `IZOTOPE_RX_VST3_DIR`. Без плагинов работают EQ, Leveler, компрессор и Loudness
+  (`--no-deplosive --no-declick --no-denoise`).
+- Обновить: `uv tool upgrade im4x-chain`. Удалить: `uv tool uninstall im4x-chain`.
+
+## Запуск
 
 Командная строка:
 
 ```sh
-uv run rx-audio process ~/Audio/ep01 -o ~/Audio/ep01-out
-uv run rx-audio process file.flac --target -16 --eq hp:60 --eq peak:3500:+1.5:1.2
-uv run rx-audio measure ~/Audio/ep01-out
+im4x-chain process ~/Audio/ep01 -o ~/Audio/ep01-out
+im4x-chain process file.flac --target -16 --eq hp:60 --eq peak:3500:+1.5:1.2
+im4x-chain measure ~/Audio/ep01-out
 ```
 
 Без `-o` файлы перезаписываются на месте (через временный файл и атомарную замену).
@@ -57,7 +66,7 @@ uv run rx-audio measure ~/Audio/ep01-out
 `--comp-knee`, `--comp-makeup`; Reduction шумоподавления — `--reduction` (по умолчанию из цепочки, 16 dB); `--json` печатает полный отчёт.
 
 Файлы: WAV остаётся WAV того же формата; FLAC пишется сразу во FLAC (libsndfile, уровень
-сжатия 5, как `flac -5`) той же разрядности, теги и обложка копируются `metaflac`. Промежуточного WAV
+сжатия 5, как `flac -5`) той же разрядности, теги и обложка не переносятся. Промежуточного WAV
 нет. 16 бит — с TPDF-дизером; в отрезках по 10 мс, которые и так округлились бы в ноль,
 дизер выключен, чтобы цифровая тишина осталась тишиной.
 
@@ -70,6 +79,22 @@ EQ и K-взвешивание считаются кусками в потока
 громкость и true peak сигнала один раз и пересчитывает их для каждого шага усиления.
 True peak считается своим полифазным ядром на `numba` (тот же фильтр, что у
 `scipy.signal.resample_poly`, значения совпадают до 1e-15, в 9 раз быстрее).
+
+## Разработка
+
+Код: [`eq.py`](src/im4x_chain/eq.py), [`leveler.py`](src/im4x_chain/leveler.py),
+[`loudness.py`](src/im4x_chain/loudness.py), [`compressor.py`](src/im4x_chain/compressor.py), плагины RX —
+[`rx_plugins.py`](src/im4x_chain/rx_plugins.py), обвязка по файлам —
+[`audio_chain.py`](src/im4x_chain/audio_chain.py), командная строка —
+[`cli.py`](src/im4x_chain/cli.py). Тесты —
+`tests/test_audio_chain.py`.
+
+Из клона репозитория:
+
+```sh
+uv run pytest
+uv run im4x-chain --help
+```
 
 ## EQ
 
@@ -101,8 +126,8 @@ True peak считается своим полифазным ядром на `nu
 ## Spectral De-noise и Mouth De-click (плагины RX)
 
 Нужны установленные `RX 12 Spectral De-noise.vst3` и `RX 12 Mouth De-click.vst3` в
-папке VST3 (см. «Что нужно»). Настройки пунктов Module Chain лежат в
-`src/rx_audio/data/rx_chain_plugins.json`.
+папке VST3 (см. «Установка»). Настройки пунктов Module Chain лежат в
+`src/im4x_chain/data/rx_chain_plugins.json`.
 
 Состояние плагина — JUCE-обёртка «VC2!», внутри zlib-JSON; у Spectral De-noise в нём
 двоичный блок с профилем шума и кривой подавления. Цепочка не нажимает Learn, а пишет

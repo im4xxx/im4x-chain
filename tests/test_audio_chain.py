@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-
 import numpy as np
 import pytest
 import soundfile as sf
 
-from rx_audio.audio_chain import process_files
-from rx_audio.leveler import leveler
-from rx_audio.loudness import integrated_lufs, loudness_control, true_peak_db
+from im4x_chain.audio_chain import process_files
+from im4x_chain.leveler import leveler
+from im4x_chain.loudness import integrated_lufs, loudness_control, true_peak_db
 
 SR = 48000
 
@@ -38,7 +35,7 @@ def speechlike(levels_db: list[float], phrase_s: float = 2.0, pause_s: float = 0
 
 
 def _have_rx_plugins() -> bool:
-    from rx_audio import rx_plugins
+    from im4x_chain import rx_plugins
     return all((rx_plugins.VST3_DIR / n).exists() for n in (rx_plugins.DENOISE_PLUGIN, rx_plugins.DECLICK_PLUGIN))
 
 
@@ -110,28 +107,24 @@ def test_leveler_without_speech_returns_input() -> None:
     assert info["changed"] is False and np.array_equal(x, y)
 
 
-@pytest.mark.skipif(not (shutil.which("flac") and shutil.which("metaflac")), reason="flac tools missing")
 @needs_rx_plugins
-def test_flac_round_trip_keeps_bit_depth_and_tags(tmp_path) -> None:
+def test_flac_round_trip_keeps_bit_depth(tmp_path) -> None:
     x, _ = speechlike([-32, -26, -30])
     src = tmp_path / "in.flac"
     sf.write(str(src), x, SR, subtype="PCM_24")
-    subprocess.run(["metaflac", "--set-tag=ARTIST=Test", str(src)], check=True)
     out = tmp_path / "out"
     res = process_files([str(src)], output_dir=str(out), use_comp=False)
     assert res["ok"], res
     assert "compressor" not in res["results"][0] and "eq" in res["results"][0]
     dst = out / "in.flac"
     assert sf.info(str(dst)).subtype == "PCM_24"
-    tags = subprocess.run(["metaflac", "--export-tags-to=-", str(dst)], capture_output=True, text=True).stdout
-    assert "ARTIST=Test" in tags
     y, _ = sf.read(str(dst))
     assert integrated_lufs(y, SR) == pytest.approx(-24.0, abs=0.05)
     assert sf.read(str(src))[0] == pytest.approx(x, abs=1e-6)                # source untouched
 
 
 def test_eq_default_is_60hz_highpass() -> None:
-    from rx_audio.eq import response_db
+    from im4x_chain.eq import response_db
     r = response_db(["hp:60"], SR, np.array([15.0, 30.0, 60.0, 120.0, 1000.0]))
     assert r[2] == pytest.approx(-3.0, abs=0.1)                               # -3 dB at 60 Hz
     assert r[1] == pytest.approx(-24.0, abs=1.5)                              # 24 dB/oct
@@ -139,7 +132,7 @@ def test_eq_default_is_60hz_highpass() -> None:
 
 
 def test_eq_peak_and_shelves_hit_their_gain() -> None:
-    from rx_audio.eq import response_db
+    from im4x_chain.eq import response_db
     assert response_db(["peak:3000:+4:1"], SR, np.array([3000.0]))[0] == pytest.approx(4.0, abs=0.01)
     assert response_db(["lowshelf:200:-3"], SR, np.array([20.0]))[0] == pytest.approx(-3.0, abs=0.1)
     assert response_db(["highshelf:8000:+2"], SR, np.array([20000.0]))[0] == pytest.approx(2.0, abs=0.15)
@@ -149,7 +142,7 @@ def test_eq_peak_and_shelves_hit_their_gain() -> None:
 
 @needs_rx_plugins
 def test_cli_processes_and_measures(tmp_path, capsys) -> None:
-    from rx_audio.cli import main
+    from im4x_chain.cli import main
     x, _ = speechlike([-32, -26, -30])
     x = x + 0.05 * np.sin(2 * np.pi * 30 * np.arange(len(x)) / SR)          # 30 Hz rumble
     src = tmp_path / "a.wav"
@@ -171,7 +164,7 @@ XCOMP_DC_STEP = {"att": {0.25: -3.474, 0.5: -5.518, 1.0: -7.191, 5.0: -8.021},  
 
 
 def test_compressor_static_curve_matches_xcomp() -> None:
-    from rx_audio.compressor import XCOMP_DEFAULTS, static_curve
+    from im4x_chain.compressor import XCOMP_DEFAULTS, static_curve
     d = XCOMP_DEFAULTS
     for lv, g in XCOMP_STATIC.items():
         assert static_curve(np.array([lv]), d["threshold"], d["ratio"], d["knee"])[0] == pytest.approx(g, abs=0.05)
@@ -179,7 +172,7 @@ def test_compressor_static_curve_matches_xcomp() -> None:
 
 
 def test_compressor_timing_matches_xcomp() -> None:
-    from rx_audio.compressor import compress
+    from im4x_chain.compressor import compress
     x = np.full(3 * SR, 10 ** (-30 / 20))
     x[SR:2 * SR] = 1.0
     y, info = compress(x, SR)
@@ -192,7 +185,7 @@ def test_compressor_timing_matches_xcomp() -> None:
 
 
 def test_compressor_links_stereo_channels() -> None:
-    from rx_audio.compressor import compress
+    from im4x_chain.compressor import compress
     x, _ = speechlike([-12, -10])
     st = np.stack([x, 0.05 * x], 1)
     y, _ = compress(st, SR)
@@ -216,14 +209,14 @@ def test_16bit_output_keeps_digital_silence(tmp_path) -> None:
 # ---------------------------------------------------------------- RX plugins without the RX app
 
 def test_rx_plugin_state_codec_roundtrip() -> None:
-    from rx_audio.rx_plugins import _juce_decode, _juce_encode
+    from im4x_chain.rx_plugins import _juce_decode, _juce_encode
     b = bytes(np.random.default_rng(3).integers(0, 256, 1001, dtype=np.uint8))
     assert _juce_decode(_juce_encode(b)) == b
 
 
 @needs_rx_plugins
 def test_spectral_denoise_learns_and_lowers_noise() -> None:
-    from rx_audio.rx_plugins import spectral_denoise
+    from im4x_chain.rx_plugins import spectral_denoise
     x, spans = speechlike([-26, -24, -28], phrase_s=3.0, pause_s=1.5, noise_db=-60)
     y, info = spectral_denoise(x, SR)
     pause = slice(spans[1].stop + 4800, spans[2].start - 4800)
@@ -234,7 +227,7 @@ def test_spectral_denoise_learns_and_lowers_noise() -> None:
 
 @needs_rx_plugins
 def test_plugin_render_in_chunks_matches_whole_file() -> None:
-    from rx_audio import rx_plugins as R
+    from im4x_chain import rx_plugins as R
     x, _ = speechlike([-20] * 8, phrase_s=10.0, pause_s=0.5, noise_db=-50)   # ~84 s, no digital silence
     ctx, j = R._unpack(R._default_state(R.DECLICK_PLUGIN))
     raw = R._pack(ctx, j)

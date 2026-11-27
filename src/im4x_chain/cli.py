@@ -2,10 +2,10 @@
 EQ -> De-plosive (where needed) -> Mouth De-click -> Spectral De-noise -> Leveler
 -> compressor -> Loudness Control.
 
-    rx-audio process FILES_OR_DIRS... [-o OUT_DIR] [--eq hp:60 --eq peak:3000:+2:1] [--no-eq]
+    im4x-chain process FILES_OR_DIRS... [-o OUT_DIR] [--eq hp:60 --eq peak:3000:+2:1] [--no-eq]
                      [--no-deplosive] [--no-declick] [--no-denoise]
                      [--no-leveler] [--no-comp] [--no-loudness] [--target -24] [--ceiling -3] ...
-    rx-audio measure FILES_OR_DIRS...
+    im4x-chain measure FILES_OR_DIRS...
 
 Files are changed in place unless ``-o`` is given. Exit code 1 if any file failed.
 """
@@ -16,8 +16,8 @@ import argparse
 import json
 import sys
 
-from rx_audio import audio_chain
-from rx_audio.eq import DEFAULT_BANDS
+from im4x_chain import audio_chain
+from im4x_chain.eq import DEFAULT_BANDS
 
 
 def _fmt(m: dict) -> str:
@@ -63,7 +63,7 @@ def _process(a: argparse.Namespace) -> int:
 def _measure(a: argparse.Namespace) -> int:
     import soundfile as sf
 
-    from rx_audio.loudness import measure
+    from im4x_chain.loudness import measure
     rc, out = 0, []
     for f in audio_chain.expand_paths(a.paths):
         try:
@@ -81,7 +81,7 @@ def _measure(a: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="rx-audio",
+    p = argparse.ArgumentParser(prog="im4x-chain",
                                 description="Voice chain without the RX app: EQ, De-plosive, Mouth De-click, De-noise, Leveler, compressor, Loudness.")
     sub = p.add_subparsers(dest="cmd", required=True)
 

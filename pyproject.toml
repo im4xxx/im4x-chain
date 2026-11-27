@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rx-audio"
+name = "im4x-chain"
 version = "0.1.0"
 description = "Voice chain for voice-over recordings without the iZotope RX app: EQ, RX 12 plugins (De-plosive, Mouth De-click, Spectral De-noise), Leveler, compressor, Loudness Control"
 readme = "README.md"
@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [project.scripts]
-rx-audio = "rx_audio.cli:main"
+im4x-chain = "im4x_chain.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rx_audio"]
+packages = ["src/im4x_chain"]
 
 [dependency-groups]
 dev = [

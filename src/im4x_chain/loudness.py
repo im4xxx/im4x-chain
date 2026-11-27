@@ -29,7 +29,7 @@ from scipy.ndimage import (binary_closing, binary_dilation, distance_transform_e
 from numba import njit, prange
 from scipy.signal import firwin, sosfilt
 
-from rx_audio.chunks import chunked
+from im4x_chain.chunks import chunked
 
 
 # --------------------------------------------------------------------------- measurement

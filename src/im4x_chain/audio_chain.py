@@ -13,8 +13,8 @@ and the true-peak ceiling exactly (a compressor after it would leave the file 1-
 
 The two RX stages host the RX 12 VST3 plugins (``rx_plugins``) with the settings of the
 user's Module Chain; RX itself does not run.
-WAV keeps its subtype; FLAC is re-encoded to FLAC with the same bit depth, tags and cover
-(written directly by libsndfile, metadata copied by ``flac_meta.copy_flac_metadata``). Files are written in place unless ``output_dir`` is
+WAV keeps its subtype; FLAC is re-encoded to FLAC with the same bit depth (written directly by
+libsndfile; tags and cover are not copied). Files are written in place unless ``output_dir`` is
 given; every write goes through a temporary file that replaces the target at the end.
 """
 
@@ -28,11 +28,11 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from rx_audio import flac_meta, rx_plugins
-from rx_audio.compressor import XCOMP_DEFAULTS, compress
-from rx_audio.eq import equalize, voice_bands
-from rx_audio.leveler import leveler
-from rx_audio.loudness import loudness_control, measure
+from im4x_chain import rx_plugins
+from im4x_chain.compressor import XCOMP_DEFAULTS, compress
+from im4x_chain.eq import equalize, voice_bands
+from im4x_chain.leveler import leveler
+from im4x_chain.loudness import loudness_control, measure
 
 AUDIO_EXT = {".wav", ".flac"}
 FLAC_LEVEL = 5 / 8                                # libsndfile 0..1 maps to flac -0..-8
@@ -128,12 +128,11 @@ def process_file(path: Path, use_leveler: bool = True, use_loudness: bool = True
     dest = (Path(output_dir).expanduser() / path.name) if output_dir else path
     dest.parent.mkdir(parents=True, exist_ok=True)
     pcm = _to_pcm(y, info.subtype, np.random.default_rng(0))
-    tmp = dest.with_name(f".{dest.stem}.rxaudio.tmp{dest.suffix}")
+    tmp = dest.with_name(f".{dest.stem}.im4xchain.tmp{dest.suffix}")
     try:
         if info.format == "FLAC":                  # straight to FLAC, no temp WAV; 0.625 = flac -5
             subtype = info.subtype if info.subtype in ("PCM_16", "PCM_24") else "PCM_24"
             sf.write(str(tmp), pcm, sr, subtype=subtype, format="FLAC", compression_level=FLAC_LEVEL)
-            flac_meta.copy_flac_metadata(path, tmp)
             entry["flac"] = {"bits": int(subtype[4:])}
         else:
             sf.write(str(tmp), pcm, sr, subtype=info.subtype, format=info.format)
@@ -156,12 +155,10 @@ def process_files(paths: list[str], use_leveler: bool = True, use_loudness: bool
                   use_denoise: bool = True, denoise_reduction_db: float | None = None,
                   use_declick: bool = True, use_deplosive: bool = True) -> dict[str, Any]:
     if eq_bands:                                   # fail fast on a typo, before touching files
-        from rx_audio.eq import parse_band
+        from im4x_chain.eq import parse_band
         for b in eq_bands:
             parse_band(b)
     files = expand_paths(paths)
-    if any(f.suffix.lower() == ".flac" for f in files):
-        flac_meta.require_metaflac()               # tags and cover must survive, check before any work
     results = []
     for f in files:
         try:

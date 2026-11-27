@@ -23,7 +23,7 @@ import numpy as np
 from scipy.ndimage import binary_closing, binary_dilation, convolve1d, find_objects, label, minimum_filter1d
 from scipy.signal import butter, sosfiltfilt
 
-from rx_audio.loudness import k_weight
+from im4x_chain.loudness import k_weight
 
 HOP = 0.01   # analysis frame, s
 
