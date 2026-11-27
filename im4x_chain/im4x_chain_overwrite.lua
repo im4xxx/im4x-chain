@@ -6,4 +6,4 @@
 
 _G.IM4X_MODE = "overwrite"
 local dir = debug.getinfo(1, "S").source:sub(2):match("^(.*[/\\])") or ""
-dofile(dir .. "im4x_claude_core.lua")
+dofile(dir .. "im4x_chain_core.lua")

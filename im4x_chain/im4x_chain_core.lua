@@ -1,19 +1,21 @@
--- im4x-chain for REAPER (Claude's version): shared engine of the two actions.
+-- im4x-chain for REAPER: shared engine of the two actions (macOS, Windows, Linux).
 --
 -- The entry scripts set IM4X_MODE ("overwrite" or "take") and dofile() this file.
 -- For every selected item the active take's WAV/FLAC file goes through the im4x-chain CLI,
 -- one file at a time, in the background; a window shows the stage and progress bars.
 --   overwrite: the file is processed in place (the CLI writes a temp file and swaps it in),
 --              then every item that plays this file is reloaded.
---   take:      the result is written next to the source as <name>_im4x.<ext> and added to
+--   take:      the result is written next to the source as <name>_rx.<ext> and added to
 --              the item as a new, active take; the original file and take stay as they are.
 -- Esc or closing the window cancels: the CLI is killed before it swaps files in, so the
 -- file being processed stays untouched; files already finished stay finished.
 
 local MODE = _G.IM4X_MODE or "take"
 local TITLE = MODE == "overwrite" and "im4x-chain — перезапись файла" or "im4x-chain — новый тейк"
-local EXT_SECTION = "im4x_claude"
+local EXT_SECTION = "im4x_chain"
 local IS_WIN = reaper.GetOS():match("^Win") ~= nil
+local SEP = IS_WIN and "\\" or "/"
+local SUFFIX = "_rx"                    -- take mode: <name>_rx.<ext>
 
 -- stage names from the CLI's progress events, and rough shares of the processing time
 -- (measured on a 24-minute voice file); a stage's bar creeps by time inside the stage
@@ -31,6 +33,35 @@ local STARTUP_SECONDS = 4               -- Python and plugin start-up
 
 local function shq(s)                        -- quote for /bin/sh
   return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
+
+local function psq(s)                        -- quote for PowerShell
+  return "'" .. tostring(s):gsub("'", "''") .. "'"
+end
+
+local function winq(s)                       -- quote for a Windows command line (paths have no ")
+  return '"' .. tostring(s) .. '"'
+end
+
+-- Windows: run a program without a console window and wait; returns exit code, output.
+-- ExecProcess passes the UTF-8 command line as wide chars, so non-Latin paths survive.
+local function run_wait(cmdline, timeout_ms)
+  local r = reaper.ExecProcess(cmdline, timeout_ms or 15000)
+  if not r then return nil, "" end
+  local code, out = r:match("^(%-?%d+)\n?(.*)$")
+  return tonumber(code), out or ""
+end
+
+local function join(a, b) return (a:gsub("[/\\]$", "")) .. SEP .. b end
+
+local function mkdir(path) reaper.RecursiveCreateDirectory(path, 0) end
+
+local function rmtree(path)
+  if IS_WIN then
+    run_wait("cmd.exe /C rmdir /S /Q " .. winq(path), 10000)
+  else
+    os.execute("rm -rf " .. shq(path))
+  end
 end
 
 local function exists(path)
@@ -85,13 +116,24 @@ local function find_cli()
   if saved ~= "" then candidates[#candidates + 1] = saved end
   local env = os.getenv("IM4X_CHAIN_CLI")
   if env and env ~= "" then candidates[#candidates + 1] = env end
-  local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
-  for _, p in ipairs({ home .. "/.local/bin/im4x-chain", "/opt/homebrew/bin/im4x-chain",
-                       "/usr/local/bin/im4x-chain" }) do
-    candidates[#candidates + 1] = p
+  if IS_WIN then
+    local home = os.getenv("USERPROFILE") or ""
+    candidates[#candidates + 1] = home .. "\\.local\\bin\\im4x-chain.exe"   -- uv tool install
+  else
+    local home = os.getenv("HOME") or ""
+    for _, p in ipairs({ home .. "/.local/bin/im4x-chain", "/opt/homebrew/bin/im4x-chain",
+                         "/usr/local/bin/im4x-chain" }) do
+      candidates[#candidates + 1] = p
+    end
   end
   for _, p in ipairs(candidates) do
     if exists(p) then return p end
+  end
+  if IS_WIN then
+    local code, out = run_wait("cmd.exe /C where im4x-chain", 10000)
+    local p = code == 0 and (out:match("[^\r\n]+") or "") or ""
+    if p ~= "" and exists(p) then return p end
+    return nil
   end
   -- REAPER started from the Dock has a short PATH: ask a login shell
   local h = io.popen("/bin/sh -lc 'command -v im4x-chain' 2>/dev/null")
@@ -104,6 +146,10 @@ local function find_cli()
 end
 
 local function cli_has_progress(cli)
+  if IS_WIN then
+    local _, out = run_wait(winq(cli) .. " process --help", 30000)
+    return out:find("--progress-file", 1, true) ~= nil
+  end
   local h = io.popen(shq(cli) .. " process --help 2>&1")
   if not h then return false end
   local out = h:read("a") or ""
@@ -126,6 +172,10 @@ end
 -- the CLI spawns render workers; collect the whole tree first, then kill it
 local function kill_tree(pid)
   if not pid then return end
+  if IS_WIN then                             -- /T takes the whole tree
+    run_wait("taskkill.exe /PID " .. math.floor(pid) .. " /T /F", 10000)
+    return
+  end
   local all, queue = {}, { pid }
   while #queue > 0 do
     local p = table.remove(queue)
@@ -188,10 +238,10 @@ end
 
 local function unique_output(path)
   local stem, ext = splitext(path)
-  local out = stem .. "_im4x" .. ext
+  local out = stem .. SUFFIX .. ext
   local n = 2
   while exists(out) do
-    out = stem .. "_im4x" .. n .. ext
+    out = stem .. SUFFIX .. n .. ext
     n = n + 1
   end
   return out
@@ -239,23 +289,53 @@ end
 
 local work_root
 local function new_workdir()
-  local base = (os.getenv("TMPDIR") or "/tmp"):gsub("/$", "")
-  work_root = string.format("%s/im4x-reaper-%d-%d", base, math.floor(reaper.time_precise() * 1000), math.random(1000000))
-  os.execute("mkdir -p " .. shq(work_root))
+  local base = IS_WIN and (os.getenv("TEMP") or os.getenv("TMP") or "C:\\Windows\\Temp")
+    or (os.getenv("TMPDIR") or "/tmp")
+  work_root = join(base, string.format("im4x-reaper-%d-%d", math.floor(reaper.time_precise() * 1000),
+    math.random(1000000)))
+  mkdir(work_root)
+end
+
+-- PowerShell runner for Windows: hidden, UTF-8 throughout, exit code into a file
+local function launch_windows(job, w, cli, args)
+  local q = {}
+  for i, a in ipairs(args) do q[i] = psq(a) end
+  local script = join(w, "run.ps1")
+  write_all(script, "\239\187\191" .. table.concat({     -- BOM: PowerShell 5 reads UTF-8
+    "$env:PYTHONUTF8 = '1'; $env:PYTHONIOENCODING = 'utf-8'",
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+    "[IO.File]::WriteAllText(" .. psq(job.pid_file) .. ", \"$PID\")",
+    "$out = & " .. psq(cli) .. " " .. table.concat(q, " ") .. " 2>&1 | Out-String",
+    "$code = $LASTEXITCODE",
+    "[IO.File]::WriteAllText(" .. psq(job.log) .. ", $out)",
+    "[IO.File]::WriteAllText(" .. psq(job.exit_file .. ".tmp") .. ", \"$code\")",
+    "Move-Item -LiteralPath " .. psq(job.exit_file .. ".tmp") .. " -Destination " .. psq(job.exit_file) .. " -Force",
+    "",
+  }, "\r\n"))
+  reaper.ExecProcess("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass " ..
+    "-WindowStyle Hidden -File " .. winq(script), -2)     -- -2: do not wait
 end
 
 local function start_job(job, cli, n, with_progress)
-  local w = work_root .. "/" .. n
-  os.execute("mkdir -p " .. shq(w))
-  job.progress_file, job.log, job.exit_file, job.pid_file = w .. "/progress.jsonl", w .. "/log.txt",
-    w .. "/exit", w .. "/pid"
-  local cmd = shq(cli) .. " process " .. shq(job.path)
+  local w = join(work_root, tostring(n))
+  mkdir(w)
+  job.progress_file, job.log, job.exit_file, job.pid_file = join(w, "progress.jsonl"), join(w, "log.txt"),
+    join(w, "exit"), join(w, "pid")
+  local args = { "process", job.path }
   if MODE == "take" then
-    job.stage_dir = dirname(job.path) .. "/.im4x-" .. basename(work_root) .. "-" .. n
-    cmd = cmd .. " -o " .. shq(job.stage_dir)
+    job.stage_dir = join(dirname(job.path), ".im4x-" .. basename(work_root) .. "-" .. n)
+    args[#args + 1], args[#args + 2] = "-o", job.stage_dir
   end
-  if with_progress then cmd = cmd .. " --progress-file " .. shq(job.progress_file) end
-  local script = w .. "/run.sh"
+  if with_progress then args[#args + 1], args[#args + 2] = "--progress-file", job.progress_file end
+  job.started = reaper.time_precise()
+  job.stage, job.stage_started, job.done_weight, job.total_weight = nil, job.started, 0, 0
+  job.expected = STARTUP_SECONDS + job.length * SECONDS_PER_AUDIO_SECOND
+  job.offset = 0
+  if IS_WIN then return launch_windows(job, w, cli, args) end
+  local q = {}
+  for i, a in ipairs(args) do q[i] = shq(a) end
+  local cmd = shq(cli) .. " " .. table.concat(q, " ")
+  local script = join(w, "run.sh")
   write_all(script, table.concat({
     "#!/bin/sh",
     'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
@@ -265,10 +345,6 @@ local function start_job(job, cli, n, with_progress)
     "",
   }, "\n"))
   os.execute("/bin/sh " .. shq(script) .. " >/dev/null 2>&1 &")
-  job.started = reaper.time_precise()
-  job.stage, job.stage_started, job.done_weight, job.total_weight = nil, job.started, 0, 0
-  job.expected = STARTUP_SECONDS + job.length * SECONDS_PER_AUDIO_SECOND
-  job.offset = 0
 end
 
 -- read new progress lines; returns nothing, updates the job
@@ -339,7 +415,7 @@ local function finish_job(job)
       with_selection(items_of(all_takes_of(job.path)), function() reaper.Main_OnCommand(40441, 0) end) -- rebuild peaks
     end
   else
-    local staged = job.stage_dir .. "/" .. basename(job.path)
+    local staged = join(job.stage_dir, basename(job.path))
     if job.ok and exists(staged) then
       local out = unique_output(job.path)
       local moved, err = os.rename(staged, out)
@@ -359,7 +435,7 @@ local function finish_job(job)
     elseif job.ok then
       job.ok, job.error = false, "CLI не создал файл " .. staged
     end
-    os.execute("rm -rf " .. shq(job.stage_dir))
+    rmtree(job.stage_dir)
   end
   reaper.UpdateArrange()
 end
@@ -370,10 +446,10 @@ local function cancel_job(job)
   kill_tree(job.cli_pid)
   if MODE == "overwrite" then
     local stem, ext = splitext(basename(job.path))       -- the CLI's temp file, left by the kill
-    os.remove(dirname(job.path) .. "/." .. stem .. ".im4xchain.tmp" .. ext)
+    os.remove(join(dirname(job.path), "." .. stem .. ".im4xchain.tmp" .. ext))
     set_offline(items_of(all_takes_of(job.path)), false)
   elseif job.stage_dir then
-    os.execute("rm -rf " .. shq(job.stage_dir))
+    rmtree(job.stage_dir)
   end
   reaper.UpdateArrange()
 end
@@ -381,18 +457,30 @@ end
 ---------------------------------------------------------------------------- window
 
 local W, H = 520, 196
+-- the window is drawn in logical points; SC is the backing scale (2 on Retina), so text is
+-- rendered at the screen's real resolution instead of being upscaled
+local SC = 0
+local function set_fonts()
+  local face = IS_WIN and "Segoe UI" or "Helvetica Neue"
+  gfx.setfont(1, face, (IS_WIN and 17 or 15) * SC)
+  gfx.setfont(2, face, (IS_WIN and 15 or 13) * SC)
+end
+
+local function px(v) return math.floor(v * SC + 0.5) end
+
 local function bar(x, y, w, h, frac, r, g, b)
-  gfx.set(0.22, 0.22, 0.24) gfx.rect(x, y, w, h, 1)
-  gfx.set(r, g, b) gfx.rect(x, y, math.floor(w * math.max(0, math.min(1, frac)) + 0.5), h, 1)
+  gfx.set(0.22, 0.22, 0.24) gfx.rect(px(x), px(y), px(w), px(h), 1)
+  gfx.set(r, g, b) gfx.rect(px(x), px(y), px(w * math.max(0, math.min(1, frac))), px(h), 1)
 end
 
 local function text(x, y, s, r, g, b)
   gfx.set(r or 0.9, g or 0.9, b or 0.9)
-  gfx.x, gfx.y = x, y
+  gfx.x, gfx.y = px(x), px(y)
   gfx.drawstr(s)
 end
 
 local function fit(s, w)                  -- cut a long name from the left, keep the end
+  w = w * SC
   if gfx.measurestr(s) <= w then return s end
   local cut = s
   while #cut > 1 and gfx.measurestr("…" .. cut) > w do
@@ -455,7 +543,7 @@ local function main()
 
   local function cleanup()
     if job and not job.finished then cancel_job(job) end
-    if work_root then os.execute("rm -rf " .. shq(work_root)) end
+    if work_root then rmtree(work_root) end
   end
   reaper.atexit(cleanup)
 
@@ -477,9 +565,8 @@ local function main()
     end
   end
 
+  gfx.ext_retina = 1                         -- ask for a HiDPI backing store
   gfx.init(TITLE, W, H)
-  gfx.setfont(1, "Arial", 15)
-  gfx.setfont(2, "Arial", 13)
   next_job()
 
   local function loop()
@@ -510,8 +597,10 @@ local function main()
     end
 
     -- draw
+    local sc = math.max(1, gfx.ext_retina or 1)   -- changes when the window moves between screens
+    if sc ~= SC then SC = sc set_fonts() end
     gfx.set(0.13, 0.13, 0.14) gfx.rect(0, 0, gfx.w, gfx.h, 1)
-    local x, w = 16, gfx.w - 32
+    local x, w = 16, gfx.w / SC - 32
     gfx.setfont(1)
     if finished_at then
       local ok = 0
@@ -549,7 +638,7 @@ local function main()
         bar(x, 126, w, 10, all, 0.35, 0.75, 0.45)
         text(x, 140, string.format("%d%%   %s", math.floor(all * 100), fmt_time(now - t0)), 0.6, 0.6, 0.64)
       end
-      text(x, gfx.h - 24, "Esc или закрыть окно — отмена (текущий файл не изменится)", 0.5, 0.5, 0.54)
+      text(x, gfx.h / SC - 24, "Esc или закрыть окно — отмена (текущий файл не изменится)", 0.5, 0.5, 0.54)
     end
     gfx.update()
     reaper.defer(loop)
@@ -557,9 +646,5 @@ local function main()
   loop()
 end
 
-if IS_WIN then
-  msg("Эта версия скриптов работает на macOS и Linux.")
-else
-  math.randomseed(math.floor(reaper.time_precise() * 1000))
-  main()
-end
+math.randomseed(math.floor(reaper.time_precise() * 1000))
+main()
